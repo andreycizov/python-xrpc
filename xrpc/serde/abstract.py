@@ -1,14 +1,29 @@
+from collections import deque
 from types import ModuleType
 from typing import NamedTuple, Any, List, _ForwardRef, _FinalTypingBase, _type_check, Optional, Union, Dict, Callable, \
-    _tp_cache, TypeVar, Type
+    _tp_cache, TypeVar, Type, Tuple, Deque, Set
+
+from dataclasses import dataclass, field
 
 DESER = Callable[[Union[list, dict]], Any]
 SER = Callable[[Any], Union[list, dict]]
 
 
-class SerdeNode(NamedTuple):
+@dataclass
+class SerdeStepContext:
+    t: Any = None
+    mod: ModuleType = None
+    generic_vals: Dict[Any, Any] = field(default_factory=dict)
+
+    def merge(self, other: 'SerdeStepContext'):
+        return SerdeStepContext(other.t, other.mod, {**self.generic_vals, **other.generic_vals})
+
+
+@dataclass
+class SerdeNode:
     type: Any
     deps: List[DESER]
+    ctx: Optional[SerdeStepContext] = field(default_factory=SerdeStepContext)
 
 
 class SerdeInst:
@@ -25,11 +40,11 @@ class SerdeInst:
         else:
             raise ValueError(f'Could not match `{t}`')
 
-    def norm(self, t: Any, mod: ModuleType) -> Any:
-        return self.match(t).norm(self, t, mod)
+    def norm(self, t: Any, ctx: SerdeStepContext) -> Any:
+        return self.match(t).norm(self, t, ctx)
 
-    def step(self, t: Any, mod: ModuleType) -> SerdeNode:
-        return self.match(t).step(self, t, mod)
+    def step(self, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        return self.match(t).step(self, t, ctx)
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
         return self.match(t).deserializer(t, deps)
@@ -38,29 +53,51 @@ class SerdeInst:
         return self.match(t).serializer(t, deps)
 
 
+class SerdeTypeDeserializer:
+    def __init__(self, parent: 'SerdeType', t: Any, deps: List[DESER]):
+        self.parent = parent
+        self.t = t
+        self.deps = deps
+
+    def __call__(self, val: Union[list, dict]) -> Any:
+        raise NotImplementedError(f'Deserializer {self.parent.__class__.__name__}')
+
+
+class SerdeTypeSerializer:
+    def __init__(self, parent: 'SerdeType', t: Any, deps: List[SER]):
+        self.parent = parent
+        self.t = t
+        self.deps = deps
+
+    def __call__(self, val: Any) -> Union[list, dict]:
+        raise NotImplementedError(f'Serializer {self.parent.__class__.__name__}')
+
+
 class SerdeType:
     """
     This is an instantiable Deserializer Type
     """
     type: str = None
+    cls_serializer: Type[SerdeTypeSerializer] = SerdeTypeSerializer
+    cls_deserializer: Type[SerdeTypeDeserializer] = SerdeTypeDeserializer
 
     def match(self, t: Any) -> bool:
         pass
 
-    def norm(self, i: SerdeInst, t: Any, mod: ModuleType) -> Any:
+    def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> Any:
         return t
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         raise NotImplementedError(self.__class__.__name__)
 
     # what if the passable object to the serializer
     # is not the same as the object passed to the deserializer ?
     # - it does not matter as we are telling the engine upfront
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
-        raise NotImplementedError(f'Deserializer {self.__class__.__name__}')
+        return self.cls_deserializer(self, t, deps)
 
     def serializer(self, t: Any, deps: List[SER]) -> SER:
-        raise NotImplementedError(f'Serializer {self.__class__.__name__}')
+        return self.cls_serializer(self, t, deps)
 
 
 T = TypeVar('T')
@@ -77,8 +114,9 @@ class SerdeStruct(NamedTuple):
         return self.serializers[t](val)
 
 
-class SerdeSet(NamedTuple):
-    items: List[SerdeNode]
+@dataclass
+class SerdeSet:
+    items: List[SerdeNode] = field(default_factory=list)
 
     def __iter__(self):
         return iter(self.items)
@@ -136,22 +174,32 @@ class SerdeSet(NamedTuple):
         return SerdeSet([])
 
     @classmethod
-    def walk(cls, i: SerdeInst, t: Any, mod: ModuleType) -> 'SerdeSet':
-        x = i.step(t, mod)
+    def walk(cls, i: SerdeInst, t: Any, ctx: SerdeStepContext = SerdeStepContext()) -> 'SerdeSet':
+        assert isinstance(ctx, SerdeStepContext)
 
-        visited: Dict[Any, SerdeNode] = {}
-        visited[x.type] = x
+        def do_visit(obj, ctx):
+            x = i.step(obj, ctx)
 
-        to_visit = [y for y in x.deps if y not in visited]
+            r[x.type] = x
+
+            for dep in x.deps:
+                if dep not in seen:
+                    seen.add(dep)
+                    to_visit.append((dep, x.ctx))
+
+        seen: Set[Any] = {t,}
+        r: Dict[Any, SerdeNode] = {}
+
+        to_visit: Deque[Tuple[t, SerdeStepContext]] = deque()
+
+        do_visit(t, ctx)
 
         while len(to_visit):
-            x = to_visit.pop()
+            x, ctx = to_visit.popleft()
 
-            x = i.step(x, mod)
+            do_visit(x, ctx)
 
-            visited[x.type] = x
+        import pprint
+        pprint.pprint(r)
 
-            to_visit = [y for y in x.deps if y not in visited and y not in to_visit] + to_visit
-            to_visit = list(set(to_visit))
-
-        return SerdeSet(list(visited.values()))
+        return SerdeSet(list(r.values()))

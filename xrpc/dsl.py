@@ -73,3 +73,4 @@ class socketio():
         return fn
 
 # todo unhandled_exception handler
+# todo startup handler

@@ -38,16 +38,18 @@ class LoggerSetup(NamedTuple):
         logger.setLevel(self.level.level)
         return LoggerLevel(None, r)
 
-    def set_level_names(self, logger: logging.Logger) -> List[LoggerLevel]:
+    def set_level_names(self, logger: logging.Logger, should_log=True) -> List[LoggerLevel]:
         lls: Dict[str, LoggerLevel] = {v.name: v for v in self.level_names}
 
-        logging.getLogger(__name__).debug('Root logger set at level %s', self.level.level_name)
+        if should_log:
+            logging.getLogger(__name__).debug('Root logger set at level %s', self.level.level_name)
 
         r = []
         for logger_name in sorted(lls.keys()):
             ll = lls[logger_name]
 
-            logging.getLogger(__name__).debug('Logger `%s` set at level %s', logger_name, ll.level_name)
+            if should_log:
+                logging.getLogger(__name__).debug('Logger `%s` set at level %s', logger_name, ll.level_name)
 
             r.append(LoggerLevel(logger_name, logging.getLogger(logger_name).level))
             logger.getChild(logger_name).setLevel(ll.level)
@@ -241,7 +243,7 @@ def logging_setup(conf: LoggerSetup, root: Optional[logging.Logger] = None):
                 finally:
                     TL.logging = last_conf
             finally:
-                LoggerSetup(a, c, []).set_level_names(root)
+                LoggerSetup(a, c, []).set_level_names(root, should_log=False)
         finally:
             for handler in handlers:
                 root.removeHandler(handler)

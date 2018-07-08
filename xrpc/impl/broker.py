@@ -97,7 +97,7 @@ def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, path: str):
         try:
             for x in recvfrom_helper(connection, logger_name='worker_inst.net.trace.raw'):
                 logging.getLogger('worker_inst.net.trace.raw.i').debug('[%d] %s %s', len(x.data), x.addr,
-                                                           x.data)
+                                                                       x.data)
                 jp: JobParams = WorkerSerde.deserialize(JobParams, json.loads(x.data))
 
                 ret = JobReturn(fn(jp.payload))
@@ -215,9 +215,17 @@ class JobState(NamedTuple):
         return JobState(created=time_now())
 
 
+class BrokerResult:
+    @rpc(RPCType.Durable)
+    def finished(self, job: JobReturn):
+        logging.getLogger('finished').warning('unused %s', job)
+
+
 class Broker:
-    def __init__(self, conf: BrokerConf):
+    def __init__(self, conf: BrokerConf, url_results: Optional[str] = None):
         self.conf = conf
+        self.url_results = url_results
+
         self.workers: Dict[Origin, WorkerState] = {}
 
         self.jobs: Dict[JobParams, JobState] = {}
@@ -306,7 +314,11 @@ class Broker:
 
     @rpc(RPCType.Durable)
     def done(self, jr: JobReturn):
-        logging.getLogger('done').error('Return type not used %s', jr)
+        if self.url_results:
+            s = service(BrokerResult, self.url_results)
+            s.finished(jr)
+        else:
+            logging.getLogger('done').error('Return type not used %s', jr)
 
         # todo 1) keep a log of completed jobs
         # todo 2) reply to sender

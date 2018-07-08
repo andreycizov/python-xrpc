@@ -2,7 +2,7 @@ import unittest
 from pprint import pprint
 
 from xrpc.dsl import ATTR_REGULAR
-from xrpc.examples import ExemplaryRPC
+from xrpc.examples.exemplary_rpc import ExemplaryRPC
 from xrpc.transform import build_rpc_list
 
 

@@ -26,6 +26,10 @@ PrevSignals = Dict[Tuple[str, int], Callable]
 ExecutionContextCallable = Callable[[], ExecutionContext]
 
 
+class SpecialException(Exception):
+    pass
+
+
 def signal_handler_wrapper(code: int, frame, key: str, conf, fn, fn_ec: ExecutionContextCallable,
                            prev_signals: PrevSignals):
     should_pass = fn_ec().exec(fn)
@@ -38,6 +42,15 @@ def signal_handler_default(code: int, frame, state: ObjectDict):
     logging.getLogger('sig.default').warning('Code=%s Frame=%s', code, frame)
 
     state.is_running = False
+    raise SpecialException()
+
+
+@contextlib.contextmanager
+def special_handler():
+    try:
+        yield
+    except SpecialException:
+        pass
 
 
 def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
@@ -178,6 +191,10 @@ def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
         for k, (conf, fn) in socketios.items():
             socketio_states[k] = fn()
 
+        # end of builds
+
+        stack.enter_context(special_handler())
+
         while state.is_running:
             step_time = time_now()
 
@@ -262,6 +279,7 @@ def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
                         raise
                     except TerminationException as e:
                         state.is_running = False
+                        raise SpecialException()
                         continue
                     finally:
                         if rp and rpcs[p.name].conf.type == RPCType.Repliable:
@@ -273,6 +291,7 @@ def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
                         x: float = ExecutionContext(transport_stack).exec(callable)
                     except TerminationException:
                         state.is_running = False
+                        raise SpecialException()
                     else:
                         waiting_for_regulars[name] = time_now() + timedelta(seconds=x)
 

@@ -66,7 +66,7 @@ class RPCKey(NamedTuple):
         return timestamp + uuid
 
     def pack_str(self) -> str:
-        return base64.b64encode(self.pack()).decode()
+        return base64.b32encode(self.pack()).decode()
 
     @classmethod
     def unpack(cls, body: bytes):

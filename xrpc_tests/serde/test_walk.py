@@ -5,7 +5,7 @@ from pprint import pprint
 from typing import NamedTuple, Optional, Dict
 
 from xrpc.serde import types
-from xrpc.serde.abstract import SerdeType, SerdeInst, SerdeSet
+from xrpc.serde.abstract import SerdeType, SerdeInst, SerdeSet, SerdeStepContext
 from xrpc.serde.types import ForwardRefSerde, UnionSerde, AtomSerde, NoneSerde, UUIDSerde, ListSerde, DictSerde, \
     EnumSerde, NamedTupleSerde, CallableArgsSerde, CallableArgsWrapper
 
@@ -37,7 +37,7 @@ class TestWalk(unittest.TestCase):
     def test_empty(self):
         i = SerdeInst(ALL_TYPES)
 
-        x = SerdeSet.walk(i, Simple, sys.modules[__name__])
+        x = SerdeSet.walk(i, Simple, SerdeStepContext(mod=sys.modules[__name__]))
 
         pprint(x)
 
@@ -67,8 +67,8 @@ class TestWalk(unittest.TestCase):
         wrapper = CallableArgsWrapper.from_func(a)
         wrapper2 = CallableArgsWrapper.from_func(obj.a)
 
-        x1 = SerdeSet.walk(i, wrapper, sys.modules[__name__])
-        x2 = SerdeSet.walk(i, wrapper2, sys.modules[__name__])
+        x1 = SerdeSet.walk(i, wrapper, SerdeStepContext(mod=sys.modules[__name__]))
+        x2 = SerdeSet.walk(i, wrapper2, SerdeStepContext(mod=sys.modules[__name__]))
 
         x = x1.merge(x2)
 

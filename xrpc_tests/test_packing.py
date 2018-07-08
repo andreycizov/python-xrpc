@@ -1,6 +1,6 @@
 import unittest
 
-from xrpc.net import RPCKey, RPCPacket
+from xrpc.net import RPCKey, RPCPacket, RPCPacketType
 
 
 class TestPacking(unittest.TestCase):
@@ -15,8 +15,9 @@ class TestPacking(unittest.TestCase):
         k = RPCKey.new()
         a = RPCPacket(
             k,
+            RPCPacketType.Req,
             'абра',
-            b'382490as'
+            [{}, None]
         )
 
         x = a.pack()

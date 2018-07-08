@@ -1,29 +1,33 @@
 import base64
 import datetime
 import inspect
+import sys
 import uuid
 from enum import Enum
 from functools import partial
 from inspect import FullArgSpec
 from types import ModuleType
 from typing import Any, _ForwardRef, _FinalTypingBase, Optional, Union, List, Dict, _tp_cache, _type_check, Callable, \
-    NamedTuple, Tuple
+    NamedTuple, Tuple, TypeVar
+
+from dataclasses import is_dataclass, fields
 
 from xrpc.util import time_parse
-from xrpc.serde.abstract import SerdeType, SerdeInst, SerdeNode, DESER, SER
+from xrpc.serde.abstract import SerdeType, SerdeInst, SerdeNode, DESER, SER, SerdeTypeDeserializer, SerdeTypeSerializer, \
+    SerdeStepContext
 
 
 class ForwardRefSerde(SerdeType):
     def match(self, t: Any) -> bool:
         return isinstance(t, _ForwardRef)
 
-    def norm(self, i: SerdeInst, t: Any, mod: ModuleType):
-        t = t._eval_type(mod.__dict__, mod.__dict__)
-        t = i.norm(t, mod)
+    def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext):
+        t = t._eval_type(ctx.mod.__dict__, ctx.mod.__dict__)
+        t = i.norm(t, ctx)
         return t
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
-        return i.step(i.norm(t, mod), mod)
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        return i.step(i.norm(t, ctx), ctx)
 
 
 class _Joint(_FinalTypingBase, _root=True):
@@ -50,18 +54,18 @@ class UnionSerde(SerdeType):
     def match(self, t: Any) -> bool:
         return t.__class__.__name__ == '_Union'
 
-    def norm(self, i: SerdeInst, t: Any, mod: ModuleType) -> Any:
+    def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> Any:
         if t.__args__[-1] == type(None):
             *vt, _ = t.__args__
-            return Optional[i.norm(Union[tuple(i.norm(vtt, mod) for vtt in vt)], mod)]
+            return Optional[i.norm(Union[tuple(i.norm(vtt, ctx) for vtt in vt)], ctx)]
         elif t.__args__[-1] == _Joint.Tag:
             *vt, _ = t.__args__
-            return Joint[i.norm(Union[tuple(i.norm(vtt, mod) for vtt in vt)], mod)]
+            return Joint[i.norm(Union[tuple(i.norm(vtt, ctx) for vtt in vt)], ctx)]
         else:
-            st = [i.norm(x, mod) for x in t.__args__]
+            st = [i.norm(x, ctx) for x in t.__args__]
             return Union[st]
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         assert hasattr(t, '__args__')
 
         # todo build all of the dependencies that would later on be used in the deserializer
@@ -73,22 +77,22 @@ class UnionSerde(SerdeType):
             vt = tuple(vt)
 
             if len(vt) == 1:
-                vt = i.norm(vt[0], mod)
+                vt = i.norm(vt[0], ctx)
 
                 return SerdeNode(t, [vt])
             else:
-                vt = i.norm(Union[vt], mod)
-                r = i.step(vt, mod)
+                vt = i.norm(Union[vt], ctx)
+                r = i.step(vt, ctx)
                 return SerdeNode(t, r.deps)
         elif sub_args[-1] == _Joint.Tag:
             *vt, _ = t.__args__
             vt = tuple(vt)
             if len(vt) == 1:
-                vt = i.norm(vt[0], mod)
+                vt = i.norm(vt[0], ctx)
 
                 fields = [z for i, (f, z) in enumerate(vt._field_types.items())]
 
-                rtn_deps = [i.norm(z, mod) for z in fields]
+                rtn_deps = [i.norm(z, ctx) for z in fields]
 
                 return SerdeNode(t, rtn_deps)
             else:
@@ -238,35 +242,45 @@ class UnionSerde(SerdeType):
         return central
 
 
+class AtomDeserializer(SerdeTypeSerializer):
+    def __init__(self, parent: 'SerdeType', t: Any, deps: List[SER]):
+        super().__init__(parent, t, deps)
+        self.mapper, *_ = [x for x in self.parent.ATOMS if t == x]
+
+    def __call__(self, val: Any) -> Union[list, dict]:
+        return self.mapper(val)
+
+
+class AtomSerializer(SerdeTypeSerializer):
+    def __init__(self, parent: 'SerdeType', t: Any, deps: List[SER]):
+        super().__init__(parent, t, deps)
+        self.mapper, *_ = [x for x in self.parent.ATOMS if t == x]
+
+    def __call__(self, val: Any) -> Union[list, dict]:
+        if not isinstance(val, self.mapper):
+            raise ValueError(f'{val} {self.mapper}')
+
+        return val
+
+
 class AtomSerde(SerdeType):
     ATOMS = (int, str, bool, float)
+
+    cls_deserializer = AtomDeserializer
+    cls_serializer = AtomSerializer
 
     def match(self, t: Any) -> bool:
         return t in self.ATOMS
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         return SerdeNode(t, [])
-
-    def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
-        mapper, *_ = [x for x in self.ATOMS if t == x]
-        return lambda val: mapper(val)
-
-    def serializer(self, t: Any, deps: List[SER]) -> SER:
-        mapper, *_ = [x for x in self.ATOMS if t == x]
-
-        def serializer_callable(val):
-            assert isinstance(val, mapper), f'{val} {mapper}'
-
-            return val
-
-        return serializer_callable
 
 
 class BytesSerde(SerdeType):
     def match(self, t: Any) -> bool:
         return issubclass(t, bytes)
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         return SerdeNode(t, [])
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
@@ -282,11 +296,25 @@ class BytesSerde(SerdeType):
         return serializer_callable
 
 
+class TypeVarSerde(SerdeType):
+    def match(self, t: Any) -> bool:
+        return isinstance(t, TypeVar)
+
+    def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> Any:
+        if t in ctx.generic_vals:
+            return ctx.generic_vals[t]
+        else:
+            raise ValueError(f'Only instantated generics are allowed for serialization {t}')
+
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        return i.step(self.norm(i, t, ctx), ctx)
+
+
 class NoneSerde(SerdeType):
     def match(self, t: Any) -> bool:
         return issubclass(type(t), type(None))
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         return SerdeNode(t, [])
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
@@ -300,12 +328,11 @@ class UUIDSerde(SerdeType):
     def match(self, t: Any) -> bool:
         return issubclass(t, uuid.UUID)
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         return SerdeNode(t, [])
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
         return lambda val: uuid.UUID(hex=val)
-
 
 
 ISO8601 = '%Y-%m-%dT%H:%M:%S.%f'
@@ -315,7 +342,7 @@ class DateTimeSerde(SerdeType):
     def match(self, t: Any) -> bool:
         return issubclass(t, datetime.datetime)
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         return SerdeNode(t, [])
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
@@ -329,10 +356,10 @@ class ListSerde(SerdeType):
     def match(self, t: Any) -> bool:
         return issubclass(t, List)
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         assert hasattr(t, '__args__')
         st, = t.__args__
-        st = i.norm(st, mod)
+        st = i.norm(st, ctx)
         return SerdeNode(List[st], [st])
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
@@ -354,9 +381,9 @@ class DictSerde(SerdeType):
     def match(self, t: Any) -> bool:
         return issubclass(t, Dict)
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         kt, vt = t.__args__
-        kt, vt = i.norm(kt, mod), i.norm(vt, mod)
+        kt, vt = i.norm(kt, ctx), i.norm(vt, ctx)
         return SerdeNode(Dict[kt, vt], [kt, vt])
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
@@ -383,61 +410,124 @@ class EnumSerde(SerdeType):
     def match(self, t: Any) -> bool:
         return issubclass(t, Enum)
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         return SerdeNode(t, [])
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
         assert False, ''
 
 
+def build_obj_module(obj):
+    m = obj.__module__
+
+    return sys.modules[m]
+
+
+class NamedTupleDeserializer(SerdeTypeDeserializer):
+    def __init__(self, parent: 'SerdeType', t: Any, deps: List[DESER]):
+        super().__init__(parent, t, deps)
+        self.fields = [f for f, _ in t._field_types.items()]
+
+    def __call__(self, val: Union[list, dict]) -> Any:
+        r = {}
+
+        i, f = None, None
+
+        try:
+
+            for i, f in enumerate(self.fields):
+                # todo how do we manage the values that are non existent?
+                # r[f] = self.deps[i](val.get(f))
+                r[f] = self.deps[i](val[f])
+        except BaseException as e:
+            raise ValueError(f'[1] {self.t}, {i}, {f}, {val}: {e}')
+
+        try:
+
+            return self.t(**r)
+        except BaseException as e:
+            raise ValueError(f'[2] {self.t}, {i}, {f}, {val}: {e}')
+
+
+class NamedTupleSerializer(SerdeTypeSerializer):
+    def __init__(self, parent: 'SerdeType', t: Any, deps: List[SER]):
+        super().__init__(parent, t, deps)
+        self.fields = [f for f, _ in t._field_types.items()]
+
+    def __call__(self, val: Any) -> Union[list, dict]:
+        return {v: self.deps[k](getattr(val, v)) for k, v in enumerate(self.fields)}
+
+
 class NamedTupleSerde(SerdeType):
+    cls_deserializer = NamedTupleDeserializer
+    cls_serializer = NamedTupleSerializer
+
     def match(self, t: Any) -> bool:
         return hasattr(t, '_field_types')
 
-    def step(self, i: SerdeInst, t: Any, mod: Any) -> SerdeNode:
-        return SerdeNode(t, [i.norm(t, mod) for f, t in t._field_types.items()])
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        ctx = SerdeStepContext(mod=build_obj_module(t))
+        return SerdeNode(t, [i.norm(t, ctx) for f, t in t._field_types.items()], ctx=ctx)
 
-    def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
-        # NamedTuple meta
-        fields = [f for f, _ in t._field_types.items()]
 
-        def deser_namedtuple(val):
-            r = {}
+class DataclassDeserializer(SerdeTypeDeserializer):
+    def __init__(self, parent: 'SerdeType', t: Any, deps: List[DESER]):
+        super().__init__(parent, t, deps)
+        self.fields = [f.name for f in sorted(fields(t), key=lambda x: x.name)]
 
-            i, f = None, None
+    def __call__(self, val: Union[list, dict]) -> Any:
+        return NamedTupleDeserializer.__call__(self, val)
 
-            try:
 
-                for i, f in enumerate(fields):
-                    r[f] = deps[i](val.get(f))
-            except BaseException as e:
-                raise ValueError(f'[1] {t}, {i}, {f}, {val}: {e}')
+class DataclassSerializer(SerdeTypeDeserializer):
+    def __init__(self, parent: 'SerdeType', t: Any, deps: List[DESER]):
+        super().__init__(parent, t, deps)
+        self.fields = [f.name for f in sorted(fields(t), key=lambda x: x.name)]
 
-            try:
+    def __call__(self, val: Union[list, dict]) -> Any:
+        return NamedTupleSerializer.__call__(self, val)
 
-                return t(**r)
-            except BaseException as e:
-                raise ValueError(f'[2] {t}, {i}, {f}, {val}: {e}')
 
-        return deser_namedtuple
+def build_generic_context(t, ctx):
+    is_generic = hasattr(t, '_gorg')
 
-    def serializer(self, t: Any, deps: List[SER]) -> SER:
-        fields = [f for f, _ in t._field_types.items()]
+    if is_generic:
+        if t.__parameters__:
+            raise ValueError(f'Not all generic parameters are instantiated: {t.__parameters__}')
 
-        def ser_namedtuple(val):
-            return {v: deps[k](getattr(val, v)) for k, v in enumerate(fields)}
+        maps = dict(zip(t._gorg.__parameters__, t.__args__))
 
-        return ser_namedtuple
+        ctx = SerdeStepContext(mod=ctx.mod, generic_vals={**ctx.generic_vals, **maps})
+    return ctx
+
+
+class DataclassSerde(SerdeType):
+    cls_deserializer = DataclassDeserializer
+    cls_serializer = DataclassSerializer
+
+    def match(self, t: Any) -> bool:
+        return is_dataclass(t)
+
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        # todo: here, we may need to instantiate the generic items
+        ctx = build_generic_context(t, ctx)
+
+        return SerdeNode(t, [i.norm(f.type, ctx) for f in sorted(fields(t), key=lambda x: x.name)], ctx)
 
 
 class CallableArgsWrapper(NamedTuple):
     method: bool
     name: str
     spec: FullArgSpec
+    cls: Optional[Any] = None
 
     @classmethod
     def from_func(self, fn: Callable):
         return CallableArgsWrapper(inspect.ismethod(fn), f'{fn.__module__}.{fn.__name__}', inspect.getfullargspec(fn))
+
+    @classmethod
+    def from_func_cls(self, cls: Any, fn: Callable):
+        return CallableArgsWrapper(True, f'{fn.__module__}.{fn.__name__}', inspect.getfullargspec(fn), cls)
 
     def __eq__(self, other):
         if self.__class__ == other.__class__:
@@ -457,6 +547,7 @@ class CallableArgsWrapper(NamedTuple):
             tuple(self.spec.kwonlyargs),
             None if self.spec.kwonlydefaults is None else tuple(sorted(self.spec.kwonlydefaults.items())),
             None if self.spec.annotations is None else tuple(sorted(self.spec.annotations.items())),
+            self.cls
         )
         return hash(r)
 
@@ -465,10 +556,15 @@ class CallableRetWrapper(NamedTuple):
     method: bool
     name: str
     spec: FullArgSpec
+    cls: Optional[Any] = None
 
     @classmethod
     def from_func(self, fn: Callable):
         return CallableRetWrapper(inspect.ismethod(fn), f'{fn.__module__}.{fn.__name__}', inspect.getfullargspec(fn))
+
+    @classmethod
+    def from_func_cls(self, cls: Any, fn: Callable):
+        return CallableRetWrapper(True, f'{fn.__module__}.{fn.__name__}', inspect.getfullargspec(fn), cls)
 
     def __eq__(self, other):
         if self.__class__ == other.__class__:
@@ -488,6 +584,7 @@ class CallableRetWrapper(NamedTuple):
             tuple(self.spec.kwonlyargs),
             None if self.spec.kwonlydefaults is None else tuple(sorted(self.spec.kwonlydefaults.items())),
             None if self.spec.annotations is None else tuple(sorted(self.spec.annotations.items())),
+            self.cls
         )
         return hash(r)
 
@@ -533,16 +630,20 @@ class CallableArgsSerde(SerdeType):
                 map[arg] = get_annot(arg)
 
         if len(missing_args):
-            raise NotImplementedError(f'Could not find annotations for: `{missing_args}`')
+            raise NotImplementedError(f'Function `{t.name}` not find annotations for arguments named: `{missing_args}`')
 
         return map
 
-    def step(self, i: SerdeInst, t: CallableArgsWrapper, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: CallableArgsWrapper, ctx: SerdeStepContext) -> SerdeNode:
+        if t.cls:
+            ctx = build_generic_context(t.cls, ctx)
+            ctx = ctx.merge(SerdeStepContext(mod=build_obj_module(t.cls)))
+
         types = sorted(self._build_args(t).items(), key=lambda x: x[0])
 
-        types = [x for _, x in types]
+        types = [i.norm(x, ctx) for _, x in types]
 
-        return SerdeNode(t, types)
+        return SerdeNode(t, types, ctx)
 
     def deserializer(self, t: CallableArgsWrapper, deps: List[DESER]) -> DESER:
         at = t.spec
@@ -639,10 +740,18 @@ class CallableRetSerde(SerdeType):
     def match(self, t: Any) -> bool:
         return isinstance(t, CallableRetWrapper)
 
-    def step(self, i: SerdeInst, t: CallableRetWrapper, mod: Any) -> SerdeNode:
+    def step(self, i: SerdeInst, t: CallableRetWrapper, ctx: SerdeStepContext) -> SerdeNode:
+        if t.cls:
+            ctx = build_generic_context(t.cls, ctx)
+            ctx = ctx.merge(SerdeStepContext(mod=build_obj_module(t.cls)))
+
         RET = 'return'
 
-        return SerdeNode(t, [t.spec.annotations.get(RET, None)])
+        dt = None
+
+        if RET in t.spec.annotations:
+            dt = i.norm(t.spec.annotations[RET], ctx)
+        return SerdeNode(t, [dt])
 
     def deserializer(self, t: CallableArgsWrapper, deps: List[DESER]) -> DESER:
         def callable_ret_deser(val):

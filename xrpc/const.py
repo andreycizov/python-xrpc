@@ -3,6 +3,7 @@ from xrpc.serde.abstract import SerdeInst
 
 SERVER_SERDE_INST = SerdeInst([
     types.NoneSerde(),
+    types.TypeVarSerde(),
     types.CallableArgsSerde(),
     types.CallableRetSerde(),
     types.ForwardRefSerde(),
@@ -14,5 +15,6 @@ SERVER_SERDE_INST = SerdeInst([
     types.ListSerde(),
     types.DictSerde(),
     types.EnumSerde(),
+    types.DataclassSerde(),
     types.NamedTupleSerde(),
 ])

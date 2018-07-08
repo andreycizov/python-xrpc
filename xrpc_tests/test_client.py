@@ -1,8 +1,9 @@
 import unittest
 
-from xrpc.client import build_wrapper
+from xrpc import error
+from xrpc.client import build_wrapper, ClientConfig
 from xrpc.service import ServiceDefn
-from xrpc.examples import ExemplaryRPC
+from xrpc.examples.exemplary_rpc import ExemplaryRPC
 from xrpc.transport import Transport, RPCTransportStack
 
 
@@ -15,10 +16,11 @@ class TestClient(unittest.TestCase):
         with t:
             ts = RPCTransportStack([t])
             pt = ServiceDefn.from_obj(rpc, override_method=True)
-            r: ExemplaryRPC = build_wrapper(pt, ts, ('127.0.0.1', 7483))
+            with self.assertRaises(error.TimeoutError):
+                r: ExemplaryRPC = build_wrapper(pt, ts, 'udp://127.0.0.1:7483', conf=ClientConfig(timeout_total=2.))
 
-            a = r.move_something(5, 6, 8, pop='asd')
-            b = r.reply(5, 6, 8, pop='asd')
+                a = r.move_something(5, 6, 8, pop='asd')
+                b = r.reply(5, 6, 8, pop='asd')
 
-            print(a)
-            print(b)
+                print(a)
+                print(b)

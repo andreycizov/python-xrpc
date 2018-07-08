@@ -17,7 +17,7 @@ class ServiceDefn(NamedTuple):
         rpcs = get_rpc(obj)
         rpcs_serde = {}
 
-        serde_set: SerdeSet = SerdeSet.walk(SERVER_SERDE_INST, datetime.datetime, datetime.datetime.__module__)
+        serde_set: SerdeSet = SerdeSet.walk(SERVER_SERDE_INST, datetime.datetime)
 
         for rpc_name, rpc_def in rpcs.items():
             fa = CallableArgsWrapper.from_func(rpc_def.fn)
@@ -30,13 +30,11 @@ class ServiceDefn(NamedTuple):
             new_serde_set1 = SerdeSet.walk(
                 SERVER_SERDE_INST,
                 fa,
-                obj.__module__
             )
 
             new_serde_set2 = SerdeSet.walk(
                 SERVER_SERDE_INST,
                 fb,
-                obj.__module__
             )
 
             new_serde_set = new_serde_set1.merge(new_serde_set2)

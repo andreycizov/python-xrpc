@@ -1,7 +1,7 @@
 import unittest
 
 from xrpc.server import run_server
-from xrpc.examples import ExemplaryRPC
+from xrpc.examples.exemplary_rpc import ExemplaryRPC
 
 
 class TestTransform(unittest.TestCase):
