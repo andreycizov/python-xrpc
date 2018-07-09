@@ -84,6 +84,8 @@ def run_results(lc, addr):
             logging.exception('')
             raise
 
+def build_logging():
+    return logging_setup(LoggerSetup(LL(None, logging.DEBUG), [], ['stream:///stderr']))
 
 class TestBroker(unittest.TestCase):
     def test_udp(self):
@@ -91,8 +93,7 @@ class TestBroker(unittest.TestCase):
         broker_addr = 'udp://127.0.0.1:7483'
         res_addr = 'udp://127.0.0.1:7485'
 
-        with logging_setup(LoggerSetup(LL(None, logging.DEBUG), [], ['stream:///stderr'])), PopenStack(
-                timeout=10.) as s:
+        with build_logging(), PopenStack(timeout=10.) as s:
             a = popen(run_broker, logging_config(), conf, broker_addr, res_addr)
             s.add(a)
             b = popen(run_worker, logging_config(), conf, broker_addr)
