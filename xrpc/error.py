@@ -22,7 +22,7 @@ class FailedError(RPCError):
 class HorizonPassedError(UndecidedError):
     def __init__(self, when: datetime):
         self.when = when
-        super().__init__()
+        super().__init__(when)
 
     def __str__(self):
         now = time_now()
@@ -49,6 +49,7 @@ class InternalError(FailedError):
     # a callable raised an exception
     def __init__(self, reason):
         self.reason = reason
+        super().__init__(reason)
 
 
 class InvalidFingerprintError(FailedError):

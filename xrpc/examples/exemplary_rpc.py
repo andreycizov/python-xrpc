@@ -57,7 +57,7 @@ class ExemplaryRPC:
     def exit_checket(self) -> float:
         if self.should_exit:
             raise TerminationException()
-        return 5
+        return 1
 
     @signal()
     def on_exit(self) -> bool:

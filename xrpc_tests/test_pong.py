@@ -36,7 +36,7 @@ def wait_items(waiting, max_wait=40):
             waiting.remove(x)
         sleep(1)
 
-    if len(waiting):
+    if len(waiting) and wait_till > time_now():
         raise TimeoutError(f'{waiting}')
 
 
