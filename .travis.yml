@@ -14,4 +14,4 @@ deploy:
   on:
     tags: true
     distributions: sdist bdist_wheel
-    repo: andreycizov/python-protobuf-gen
+    repo: andreycizov/python-xrpc
