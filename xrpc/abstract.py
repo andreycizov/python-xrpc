@@ -67,7 +67,7 @@ class Queue(Generic[T, H]):
     def pop(self) -> T:
         raise NotImplementedError()
 
-    def peak(self) -> Optional[T]:
+    def peek(self) -> Optional[T]:
         raise NotImplementedError()
 
 
@@ -121,7 +121,7 @@ class BinaryQueue(Queue[T, Deque[T]]):
         r = self.h.popleft()
         return r
 
-    def peak(self) -> Optional[T]:
+    def peek(self) -> Optional[T]:
         if len(self.h):
             return self.h[0]
         else:
@@ -143,7 +143,7 @@ class HeapQueue(Queue[T, List[T]]):
     def pop(self) -> T:
         return heapq.heappop(self.h)
 
-    def peak(self) -> Optional[T]:
+    def peek(self) -> Optional[T]:
         if len(self.h):
             return self.h[0]
         else:

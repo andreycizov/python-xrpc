@@ -57,6 +57,15 @@ def default_test(tc: unittest.TestCase, q_cls: Type[Queue[int, H]]):
         q.push(0)
         tc.assertEqual([0, 1], ex(q))
 
+    with tc.subTest('queue_007'):
+        q = q_cls([])
+        tc.assertIsNone(q.peek())
+
+        val = 5
+        q.push(val)
+        v2 = q.peek()
+        tc.assertEqual(v2, val)
+
 
 class TestStruct(unittest.TestCase):
     def test_binary_queue_001(self):
