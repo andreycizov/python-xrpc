@@ -3,9 +3,12 @@ from typing import Dict, Any, Tuple, Callable, NamedTuple
 
 from xrpc.dsl import ATTR_RPC, ATTR_REGULAR, rpc, regular, signal, ATTR_SIGNAL, ATTR_STARTUP, startup, \
     socketio, ATTR_SOCKETIO
+from xrpc.generic import build_generic_context
 
 
 def build_rpc_list(x, conf_attr_name=ATTR_RPC) -> Tuple[str, Any, Any]:
+    x, _ = build_generic_context(x)
+
     r = []
     for attr_name in dir(x):
         attr_val = getattr(x, attr_name)

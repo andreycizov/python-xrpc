@@ -9,7 +9,7 @@ from collections import deque
 from datetime import datetime
 from itertools import count
 from time import sleep
-from typing import NamedTuple, Callable, Optional, Dict, Deque
+from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic
 
 from xrpc.logging import logging_config, LoggerSetup, logging_setup, circuitbreaker
 from xrpc.popen import popen

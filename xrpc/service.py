@@ -1,7 +1,8 @@
 import datetime
-from typing import NamedTuple, Any, Optional
+from typing import NamedTuple, Any
 
 from xrpc.const import SERVER_SERDE_INST
+from xrpc.generic import build_generic_context
 from xrpc.transform import RPCS, get_rpc
 from xrpc.serde.abstract import SerdeStruct, SerdeSet
 from xrpc.serde.types import CallableArgsWrapper, CallableRetWrapper
@@ -13,28 +14,29 @@ class ServiceDefn(NamedTuple):
     rpcs_serde: Any
 
     @classmethod
-    def from_obj(cls, obj, override_method=False):
+    def from_obj(cls, obj):
+
+        obj, ctx = build_generic_context(obj)
+
         rpcs = get_rpc(obj)
         rpcs_serde = {}
 
-        serde_set: SerdeSet = SerdeSet.walk(SERVER_SERDE_INST, datetime.datetime)
+        serde_set: SerdeSet = SerdeSet.walk(SERVER_SERDE_INST, datetime.datetime, ctx)
 
         for rpc_name, rpc_def in rpcs.items():
-            fa = CallableArgsWrapper.from_func(rpc_def.fn)
-            fb = CallableRetWrapper.from_func(rpc_def.fn)
-
-            if override_method:
-                fa = fa._replace(method=True)
-                fb = fb._replace(method=True)
+            fa = CallableArgsWrapper.from_func_cls(obj, rpc_def.fn, )
+            fb = CallableRetWrapper.from_func_cls(obj, rpc_def.fn, )
 
             new_serde_set1 = SerdeSet.walk(
                 SERVER_SERDE_INST,
                 fa,
+                ctx,
             )
 
             new_serde_set2 = SerdeSet.walk(
                 SERVER_SERDE_INST,
                 fb,
+                ctx,
             )
 
             new_serde_set = new_serde_set1.merge(new_serde_set2)

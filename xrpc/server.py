@@ -31,8 +31,8 @@ class SpecialException(Exception):
 
 
 def signal_handler_wrapper(code: int, frame, key: str, conf, fn, fn_ec: ExecutionContextCallable,
-                           prev_signals: PrevSignals):
-    should_pass = fn_ec().exec(fn)
+                           prev_signals: PrevSignals, running_instance=None):
+    should_pass = fn_ec().exec(fn, running_instance)
     logging.getLogger('sig.wrapper').debug('Code=%s Frame=%s ShouldPass=%s', code, frame, should_pass)
     if should_pass:
         prev_signals[(key, code)](code, frame)
@@ -43,9 +43,9 @@ def signal_handler_default(code: int, frame, state: ObjectDict, prev_signals: Pr
 
     if code in prev_signals:
         fn = prev_signals[code]
-        print(code, fn)
-        logging.getLogger('sig.default.prev').warning('Run previous handler %s', fn)
-        fn(code, frame)
+        if callable(fn):
+            logging.getLogger('sig.default.prev').warning('Run previous handler %s', fn)
+            fn(code, frame)
 
     state.is_running = False
     raise SpecialException()
@@ -59,19 +59,19 @@ def special_handler():
         raise KeyboardInterrupt from None
 
 
-def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
+def run_server(cls, running_instance, bind_urls: List[str], horizon_each=60.):
     # todo: enable mapping between RPC groups and the bind urls
     # todo: - the issue with this is the back-comm. ? which bound url sends the packets
 
-    regulars = get_regular(running_instance)
-    rpcs = get_rpc(running_instance)
-    signals = get_signal(running_instance)
-    startups = get_startup(running_instance)
-    socketios = get_socketio(running_instance)
+    regulars = get_regular(cls)
+    rpcs = get_rpc(cls)
+    signals = get_signal(cls)
+    startups = get_startup(cls)
+    socketios = get_socketio(cls)
 
     # we can't yet build an RPC from the class without pushing the envelope.
 
-    service_defn = ServiceDefn.from_obj(running_instance)
+    service_defn = ServiceDefn.from_obj(cls)
 
     waiting_for_regulars: Dict[str, datetime] = {
         k: time_now() + timedelta(seconds=x.conf.initial) for k, x in regulars.items()
@@ -122,7 +122,8 @@ def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
                 handler=partial(
                     signal_handler_wrapper, key=k, conf=conf, fn=fn,
                     prev_signals=prev_signals,
-                    fn_ec=exec_ctx_fn
+                    fn_ec=exec_ctx_fn,
+                    running_instance=running_instance
                 )
             )
             prev_hdlrs = stack.enter_context(x)
@@ -156,6 +157,7 @@ def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
                         rp = RPCPacket(p.key, RPCPacketType.Rep, RPCReply.ok.value, rep)
                 else:
                     if p.name not in rpcs:
+                        logging.error(f'Could not find name %s %s', p.name, set(rpcs.keys()))
                         raise InvalidFingerprintError()
 
                     fa, fb = service_defn.rpcs_serde[p.name]
@@ -272,7 +274,7 @@ def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
                         ctx = ExecutionContext(transport_stack, raw_packet.addr, p.key, ret=replier)
                         rpc_fn = rpcs[p.name].fn
                         try:
-                            ret = ctx.exec(rpc_fn, *args, **kwargs)
+                            ret = ctx.exec(rpc_fn, running_instance, *args, **kwargs)
                         except TerminationException:
                             raise
                         except Exception as e:
@@ -303,7 +305,7 @@ def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
             if should_regular:
                 for name, regular, callable in [(k, *regulars[k]) for k, v in max_poll_regulars.items() if v <= 0.]:
                     try:
-                        x: float = ExecutionContext(transport_stack).exec(callable)
+                        x: float = ExecutionContext(transport_stack).exec(callable, running_instance)
                     except TerminationException:
                         state.is_running = False
                         raise SpecialException()
@@ -318,7 +320,7 @@ def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
                     if is_ready:
                         callable = socketios[key][1]
 
-                        r = ExecutionContext(transport_stack).exec(callable)
+                        r = ExecutionContext(transport_stack).exec(callable, running_instance)
 
                         assert r is not None, key
 

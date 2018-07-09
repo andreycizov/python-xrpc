@@ -8,7 +8,7 @@ from xrpc.server import run_server
 from xrpc.examples.exemplary_rpc import ExemplaryRPC
 from xrpc.service import ServiceDefn
 from xrpc.transport import RPCTransportStack, Transport
-from xrpc_tests.test_pong import wait_items, cov
+from xrpc_tests.examples.test_pong import wait_items, cov
 
 
 def run_times():
@@ -16,7 +16,7 @@ def run_times():
         rpc = ExemplaryRPC()
 
         sleep(1)
-        run_server(rpc, ['udp://127.0.0.1:7483'])
+        run_server(ExemplaryRPC, rpc, ['udp://127.0.0.1:7483'])
 
 
 def run_times_2():
@@ -27,7 +27,7 @@ def run_times_2():
 
         with t:
             ts = RPCTransportStack([t])
-            pt = ServiceDefn.from_obj(rpc, override_method=True)
+            pt = ServiceDefn.from_obj(rpc)
             r: ExemplaryRPC = build_wrapper(pt, ts, 'udp://127.0.0.1:7483', conf=ClientConfig(timeout_total=5))
 
             while True:
@@ -40,7 +40,7 @@ def run_times_2():
                     sleep(2)
 
 
-class TestTransform(unittest.TestCase):
+class TestServer(unittest.TestCase):
     def test_udp(self):
         with Pool(2) as p:
             a = p.apply_async(run_times)

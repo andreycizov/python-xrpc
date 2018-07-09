@@ -262,7 +262,7 @@ class TypeVarSerde(SerdeType):
         if t in ctx.generic_vals:
             return ctx.generic_vals[t]
         else:
-            raise ValueError(f'Only instantated generics are allowed for serialization {t}')
+            raise ValueError(f'Only instantated generics are allowed for serialization {t} {ctx}')
 
     def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         return i.step(self.norm(i, t, ctx), ctx)
@@ -501,24 +501,32 @@ class DataclassSerializer(SerdeTypeDeserializer):
 
 
 def build_generic_context(t, ctx):
+    def mmaps(pars, args):
+        maps = dict(zip(pars, args))
+
+        maps = {k: ctx.generic_vals.get(k, v) if isinstance(v, TypeVar) else v for k, v in maps.items()}
+
+        uninst = {k: isinstance(maps[k], TypeVar) for k in maps}
+
+        if any(uninst.values()):
+            raise ValueError(f'Not all generic parameters are instantiated: {uninst}')
+
+        return maps
+
     if sys.version_info >= (3, 7):
         if not hasattr(t, '__origin__'):
             return ctx
 
-        maps = dict(zip(t.__origin__.__parameters__, t.__args__))
+        maps = mmaps(t.__origin__.__parameters__, t.__args__)
 
         return SerdeStepContext(mod=ctx.mod, generic_vals={**ctx.generic_vals, **maps})
     else:
-        is_generic = hasattr(t, '_gorg')
+        if not hasattr(t, '_gorg'):
+            return ctx
 
-        if is_generic:
-            if t.__parameters__:
-                raise ValueError(f'Not all generic parameters are instantiated: {t.__parameters__}')
+        maps = mmaps(t._gorg.__parameters__, t.__args__)
 
-            maps = dict(zip(t._gorg.__parameters__, t.__args__))
-
-            ctx = SerdeStepContext(mod=ctx.mod, generic_vals={**ctx.generic_vals, **maps})
-        return ctx
+        return SerdeStepContext(mod=ctx.mod, generic_vals={**ctx.generic_vals, **maps})
 
 
 class DataclassSerde(SerdeType):
@@ -663,7 +671,8 @@ class CallableArgsSerde(SerdeType):
                 map[arg] = get_annot(arg)
 
         if len(missing_args):
-            raise NotImplementedError(f'Function `{t.name}` not find annotations for arguments named: `{missing_args}`')
+            raise NotImplementedError(
+                f'Function `{t.method}` `{t.name}` not find annotations for arguments named: `{missing_args}`')
 
         return map
 
@@ -784,7 +793,7 @@ class CallableRetSerde(SerdeType):
 
         if RET in t.spec.annotations:
             dt = i.norm(t.spec.annotations[RET], ctx)
-        return SerdeNode(t, [dt])
+        return SerdeNode(t, [dt], ctx)
 
     def deserializer(self, t: CallableArgsWrapper, deps: List[DESER]) -> DESER:
         def callable_ret_deser(val):

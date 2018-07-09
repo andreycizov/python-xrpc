@@ -19,7 +19,8 @@ def cov():
         cov = coverage.process_startup()
         yield
     finally:
-        cov.save()
+        if cov:
+            cov.save()
 
 
 def run_server_a(addr, other_addr, ):
