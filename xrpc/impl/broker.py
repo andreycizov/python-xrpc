@@ -73,8 +73,8 @@ WorkerCallable = Callable[[bytes], bytes]
 
 
 def build_worker_serde():
-    a = SerdeSet.walk(SERVER_SERDE_INST, JobReturn, JobReturn.__module__)
-    b = SerdeSet.walk(SERVER_SERDE_INST, JobParams, JobReturn.__module__)
+    a = SerdeSet.walk(SERVER_SERDE_INST, JobReturn)
+    b = SerdeSet.walk(SERVER_SERDE_INST, JobParams)
 
     s = a.merge(b)
     return s.struct(SERVER_SERDE_INST)

@@ -44,7 +44,7 @@ def signal_handler_default(code: int, frame, state: ObjectDict, prev_signals: Pr
     if code in prev_signals:
         fn = prev_signals[code]
         print(code, fn)
-        logging.getLogger('sig.default.prev').warning('Run previous handler', code)
+        logging.getLogger('sig.default.prev').warning('Run previous handler %s', fn)
         fn(code, frame)
 
     state.is_running = False
@@ -55,8 +55,8 @@ def signal_handler_default(code: int, frame, state: ObjectDict, prev_signals: Pr
 def special_handler():
     try:
         yield
-    except SpecialException:
-        pass
+    except (KeyboardInterrupt, SpecialException):
+        raise KeyboardInterrupt from None
 
 
 def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
@@ -95,7 +95,7 @@ def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
 
         for code, prev_hdlr in zip(codes, prev_hdlrs):
             prev_signals2[code] = prev_hdlr
-            logging.getLogger('signal.bind.default').debug('Code=%d Name=%s', code)
+            logging.getLogger('signal.bind.default').debug('Code=%d', code)
 
 
         # build transports
