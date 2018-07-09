@@ -1,13 +1,13 @@
 import signal
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Union, Callable
+from typing import Union, Callable, Any
 
 import pytz
 
 
 @contextmanager
-def signal_context(signals=(signal.SIGINT, signal.SIGTERM), handler: Union[Callable, int] = signal.SIG_IGN):
+def signal_context(signals=(signal.SIGINT, signal.SIGTERM), handler: Union[int, Any] = signal.SIG_IGN):
     prev_hdlrs = [signal.signal(s, handler) for s in signals]
 
     try:

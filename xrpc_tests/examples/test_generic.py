@@ -12,7 +12,8 @@ from xrpc.examples.generic import GenericRPC, Data
 from xrpc.server import run_server
 from xrpc.service import ServiceDefn
 from xrpc.transport import Transport, RPCTransportStack
-from xrpc_tests.examples.test_pong import wait_items, cov
+from xrpc_tests.examples.test_pong import wait_items
+from xrpc.popen import cov
 
 
 def run_times():

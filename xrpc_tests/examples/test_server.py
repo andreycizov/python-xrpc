@@ -8,7 +8,8 @@ from xrpc.server import run_server
 from xrpc.examples.exemplary_rpc import ExemplaryRPC
 from xrpc.service import ServiceDefn
 from xrpc.transport import RPCTransportStack, Transport
-from xrpc_tests.examples.test_pong import wait_items, cov
+from xrpc_tests.examples.test_pong import wait_items
+from xrpc.popen import cov
 
 
 def run_times():

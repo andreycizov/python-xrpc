@@ -2,10 +2,12 @@ import json
 import logging
 import os
 from inspect import getfullargspec
+from subprocess import TimeoutExpired
 
 import shutil
 import socket
 import tempfile
+from signal import SIGTERM
 from argparse import ArgumentParser
 from collections import deque
 from datetime import datetime
@@ -21,11 +23,10 @@ from xrpc.const import SERVER_SERDE_INST
 from xrpc.dsl import rpc, RPCType, regular, socketio, signal
 from xrpc.error import HorizonPassedError, TimeoutError
 from xrpc.runtime import service, sender
-from xrpc.serde.abstract import SerdeSet, SerdeInst, SerdeStruct
-from xrpc.serde.types import CallableArgsSerde, CallableArgsWrapper, CallableRetWrapper, pair_spec, build_types, \
-    ARGS_RET
+from xrpc.serde.abstract import SerdeSet, SerdeStruct
+from xrpc.serde.types import pair_spec, build_types, ARGS_RET
 from xrpc.transport import recvfrom_helper, Packet, Origin
-from xrpc.util import time_now
+from xrpc.util import time_now, signal_context
 
 
 class BrokerConf(NamedTuple):
@@ -99,7 +100,11 @@ def get_func_types(fn: WorkerCallable) -> Tuple[Type[RequestType], Type[Response
 
 
 def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, path: str):
-    with logging_setup(logger_config), circuitbreaker():
+    def sig_handler(code, frame):
+        logging.getLogger(__name__).error(f'Received {code}')
+        raise KeyboardInterrupt('')
+
+    with logging_setup(logger_config), circuitbreaker(), signal_context(handler=sig_handler):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # UDP
 
         logging.getLogger('worker_inst').debug('Binding to %s', path)
@@ -228,7 +233,12 @@ class Worker(Generic[RequestType, ResponseType]):
             s.leaving()
         except TimeoutError:
             logging.getLogger('exit').error('Could not contact broker')
-        self.inst.kill()
+        self.inst.send_signal(SIGTERM)
+        try:
+            self.inst.wait(1)
+        except TimeoutExpired:
+            logging.getLogger('exit').error('Could stop worker graciously')
+            self.inst.kill()
         if self.dir:
             shutil.rmtree(self.dir)
         return True

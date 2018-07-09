@@ -6,22 +6,10 @@ from datetime import timedelta
 from multiprocessing.pool import Pool
 from time import sleep
 
+from xrpc.popen import cov
 from xrpc.server import run_server
 from xrpc.examples.exemplary_rpc import BroadcastClientRPC, BroadcastRPC
 from xrpc.util import time_now
-
-
-@contextmanager
-def cov():
-    import coverage
-
-    cov = None
-    try:
-        cov = coverage.process_startup()
-        yield
-    finally:
-        if cov:
-            cov.save()
 
 
 def run_server_a(addr, other_addr, ):

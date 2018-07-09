@@ -10,10 +10,10 @@ from xrpc.dsl import RPCType, rpc, regular
 from xrpc.error import TerminationException
 from xrpc.impl.broker import Broker, Worker, BrokerConf, BrokerResult
 from xrpc.logging import logging_setup, LoggerSetup, LL, logging_config
-from xrpc.popen import popen_main, popen, PopenStack
+from xrpc.popen import popen, PopenStack, cov
 from xrpc.server import run_server
 from xrpc_tests.examples.test_generic import build_ts
-from xrpc_tests.examples.test_pong import cov, wait_items
+from xrpc_tests.examples.test_pong import wait_items
 
 
 @dataclass(eq=True, frozen=True)

@@ -3,6 +3,7 @@ import logging
 import os
 import pickle
 import zlib
+from contextlib import ExitStack, contextmanager
 
 import signal
 
@@ -11,6 +12,19 @@ import sys
 from typing import NamedTuple, Callable, Any, Tuple, Dict, List
 
 from xrpc.util import signal_context
+
+
+@contextmanager
+def cov():
+    import coverage
+
+    cov = None
+    try:
+        cov = coverage.process_startup()
+        yield
+    finally:
+        if cov:
+            cov.save()
 
 
 def argv_encode(x: Any):
@@ -65,33 +79,33 @@ class PopenStack:
 
 
 def popen_main():
-    if os.environ.get('COVERAGE_PROCESS_START'):
-        import coverage
-        coverage.process_startup()
+    with ExitStack() as es:
+        if os.environ.get('COVERAGE_PROCESS_START'):
+            es.enter_context(cov())
 
-    def popen_signal_handler(code, frame):
-        if callable(prev_handler[code]):
-            prev_handler[code](code, frame)
+        def popen_signal_handler(code, frame):
+            if callable(prev_handler[code]):
+                prev_handler[code](code, frame)
 
-    codes = (signal.SIGINT, signal.SIGTERM)
+        codes = (signal.SIGINT, signal.SIGTERM)
 
-    with signal_context(signals=codes, handler=popen_signal_handler) as prev_handlers:
-        prev_handler = {k: v for k, v in zip(codes, prev_handlers)}
+        with signal_context(signals=codes, handler=popen_signal_handler) as prev_handlers:
+            prev_handler = {k: v for k, v in zip(codes, prev_handlers)}
 
-        try:
-            defn: PopenStruct = argv_decode(sys.argv[1])
-        except:
-            import traceback
-            import pprint
+            try:
+                defn: PopenStruct = argv_decode(sys.argv[1])
+            except:
+                import traceback
+                import pprint
 
-            fmtd = pprint.pformat(sys.argv)
-            traceback.print_exc(file=sys.stderr)
-            sys.stderr.flush()
-            raise ValueError(f'Cannot unpickle arguments, called with {fmtd}')
+                fmtd = pprint.pformat(sys.argv)
+                traceback.print_exc(file=sys.stderr)
+                sys.stderr.flush()
+                raise ValueError(f'Cannot unpickle arguments, called with {fmtd}')
 
-        fn = defn.fn
+            fn = defn.fn
 
-        fn(*defn.args, **defn.kwargs)
+            fn(*defn.args, **defn.kwargs)
 
 
 if __name__ == '__main__':
