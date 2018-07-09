@@ -21,18 +21,16 @@ class ExemplaryRPC:
 
     @rpc(RPCType.Signalling)
     def move_something(self, id: int, *xyzargs: int, pop: str, pip: int = 2, **zzargs: int):
-        print('call made', 'ms', id, xyzargs, pop, pip, zzargs)
+        #print('call made', 'ms', id, xyzargs, pop, pip, zzargs)
         # so we pack a call with args and kwargs and let the deserializer guess the contents
         # how do we write a proper deserializer in such a scenario?
         pass
-        print('Received from ', sender())
 
         # todo: we need an ability to save the sender
         # todo: we need an ability to automatically transform the sender to a relevant object
 
     @rpc(RPCType.Repliable)
     def reply(self, id: int, *xyzargs: int, pop: str, pip: int = 2, **zzargs: int) -> float:
-        print('call made', 'reply', id, xyzargs, pop, pip, zzargs)
         # so we pack a call with args and kwargs and let the deserializer guess the contents
         # how do we write a proper deserializer in such a scenario?
 
@@ -41,17 +39,14 @@ class ExemplaryRPC:
 
     @regular()
     def regularly_executable(self, id: int = 1) -> int:
-        print('regularly_executable')
         return 1
 
     @regular()
     def regularly_executable_def(self, id: int = 1, b=6, a=5) -> int:
-        print('regularly_executable_def')
         return 2
 
     @regular()
     def regularly_executable_def2(self, id: int = 1, b=6, a=5) -> float:
-        print('regularly_executable_def2')
         return 3
 
     @rpc(RPCType.Repliable)
@@ -89,7 +84,7 @@ class BroadcastClientRPC:
         s = service(BroadcastRPC, self.broadcast_addr)
         s.arrived()
 
-        return 1.
+        return 0.05
 
 
 class BroadcastRPC:
@@ -124,4 +119,4 @@ class BroadcastRPC:
         if len(self.origins_met) == 1 and len(self.origins) == 0:
             raise TerminationException()
 
-        return 1.
+        return 0.05

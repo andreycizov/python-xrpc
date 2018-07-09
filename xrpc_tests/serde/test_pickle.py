@@ -1,4 +1,6 @@
 import base64
+import pickle
+import sys
 import unittest
 from typing import NamedTuple, Optional, TypeVar, Generic
 
@@ -63,9 +65,9 @@ class TestPickle(unittest.TestCase):
             with self.subTest(f'{n}.is_creatable'):
                 WorkerSerde = SerdeSet.walk(SERVER_SERDE_INST, gt).struct(SERVER_SERDE_INST)
 
-            with self.subTest(f'{n}.is_picklable'):
-                import pickle
-                pickle.dumps(WorkerSerde)
+            if sys.version_info >= (3, 7):
+                with self.subTest(f'{n}.is_picklable'):
+                    pickle.dumps(WorkerSerde)
 
             with self.subTest(f'{n}.des'):
                 x = WorkerSerde.deserialize(gt, tv)
@@ -79,9 +81,9 @@ class TestPickle(unittest.TestCase):
             WorkerSerde = SerdeSet.walk(SERVER_SERDE_INST, ObjR1) \
                 .merge(SerdeSet.walk(SERVER_SERDE_INST, ObjR2)).struct(SERVER_SERDE_INST)
 
-        with self.subTest('is_picklable'):
-            import pickle
-            pickle.dumps(WorkerSerde)
+        if sys.version_info >= (3, 7):
+            with self.subTest('is_picklable'):
+                pickle.dumps(WorkerSerde)
 
         xo = {'i': {'i': {'i': None}}}
         with self.subTest('des'):

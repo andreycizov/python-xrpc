@@ -1,7 +1,6 @@
 import sys
 import unittest
 from inspect import isclass
-from pprint import pprint
 from typing import NamedTuple, Optional, Dict
 
 from xrpc.serde import types
@@ -39,15 +38,11 @@ class TestWalk(unittest.TestCase):
 
         x = SerdeSet.walk(i, Simple, SerdeStepContext(mod=sys.modules[__name__]))
 
-        pprint(x)
-
         y = x.struct(i)
 
-        pprint(y)
 
         z = y.deserialize(Simple, {'x': 5, 'z': {'y': 'abc'}})
 
-        pprint(z)
 
     def test_caller(self):
         i = SerdeInst(CALL_TYPES)
@@ -72,15 +67,12 @@ class TestWalk(unittest.TestCase):
 
         x = x1.merge(x2)
 
-        pprint(x)
 
         y = x.struct(i)
 
-        pprint(y)
 
         z = y.deserialize(wrapper, [[5, 'asd', {'a': 'a'}, {'b': 'c'}], {'g': 'abc', 'd': 5}])
 
-        pprint(z)
 
         args, kwargs = z
 
@@ -90,11 +82,9 @@ class TestWalk(unittest.TestCase):
 
         z = y.deserialize(wrapper2, [[5, {'x': 5}, 'asd', {'a': 'a'}, {'b': 'c'}], {'g': 'abc', 'd': 5}])
 
-        pprint(['zee', z])
 
         zb = y.serialize(wrapper2, z)
 
-        pprint(zb)
 
         args, kwargs = z
 

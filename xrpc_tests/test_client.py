@@ -21,6 +21,3 @@ class TestClient(unittest.TestCase):
 
                 a = r.move_something(5, 6, 8, pop='asd')
                 b = r.reply(5, 6, 8, pop='asd')
-
-                print(a)
-                print(b)

@@ -17,7 +17,7 @@ def run_server_b(addr):
     run_server(BroadcastRPC(), [addr])
 
 
-def wait_items(waiting, max_wait=20):
+def wait_items(waiting, max_wait=40):
     wait_till = time_now() + timedelta(seconds=max_wait)
     waiting = list(waiting)
 
@@ -31,7 +31,7 @@ def wait_items(waiting, max_wait=20):
                     return
                 to_remove.append(x)
             except multiprocessing.context.TimeoutError:
-                print('timout', waiting)
+                pass
         for x in to_remove:
             waiting.remove(x)
         sleep(1)

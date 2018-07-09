@@ -53,7 +53,6 @@ class TestGeneric(unittest.TestCase):
 
         x = WorkerSerde.deserialize(Obj[int], {'i': 5})
         y = WorkerSerde.serialize(Obj[int], Obj(5))
-        print(x, y)
 
     def test_generic_method(self):
         fa = CallableArgsWrapper.from_func_cls(Runner[int], Runner.method2)

@@ -206,7 +206,4 @@ class SerdeSet:
 
             do_visit(x, ctx)
 
-        import pprint
-        pprint.pprint(r)
-
         return SerdeSet(list(r.values()))

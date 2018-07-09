@@ -14,7 +14,7 @@ def run_times():
     try:
         run_server(rpc, ['udp://127.0.0.1:7483'])
     finally:
-        print('ZYXEL')
+        pass
 
 
 def run_times_2():
