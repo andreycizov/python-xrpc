@@ -1,5 +1,6 @@
 import multiprocessing
 import unittest
+from contextlib import contextmanager
 from datetime import timedelta
 from multiprocessing.pool import Pool
 from time import sleep
@@ -9,12 +10,26 @@ from xrpc.examples.exemplary_rpc import BroadcastClientRPC, BroadcastRPC
 from xrpc.util import time_now
 
 
+@contextmanager
+def cov():
+    import coverage
+
+    cov = None
+    try:
+        cov = coverage.process_startup()
+        yield
+    finally:
+        cov.save()
+
+
 def run_server_a(addr, other_addr, ):
-    run_server(BroadcastClientRPC(other_addr), [addr])
+    with cov():
+        run_server(BroadcastClientRPC(other_addr), [addr])
 
 
 def run_server_b(addr):
-    run_server(BroadcastRPC(), [addr])
+    with cov():
+        run_server(BroadcastRPC(), [addr])
 
 
 def wait_items(waiting, max_wait=40):
@@ -42,15 +57,14 @@ def wait_items(waiting, max_wait=40):
 
 class TestTransform(unittest.TestCase):
     def test_udp(self):
-        p = Pool(2)
-        url_a = 'udp://127.0.0.1:11134'
-        url_b = 'udp://127.0.0.1:11146'
-        a = p.apply_async(run_server_a, args=(url_a, url_b))
-        b = p.apply_async(run_server_b, args=(url_b,))
+        with Pool(2) as p:
+            url_a = 'udp://127.0.0.1:11134'
+            url_b = 'udp://127.0.0.1:11146'
+            a = p.apply_async(run_server_a, args=(url_a, url_b))
+            b = p.apply_async(run_server_b, args=(url_b,))
 
-        waiting = [a, b]
+            waiting = [a, b]
 
-        wait_items(waiting)
-
-        p.close()
+            wait_items(waiting)
+        print('p.join')
         p.join()

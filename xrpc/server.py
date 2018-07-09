@@ -38,8 +38,14 @@ def signal_handler_wrapper(code: int, frame, key: str, conf, fn, fn_ec: Executio
         prev_signals[(key, code)](code, frame)
 
 
-def signal_handler_default(code: int, frame, state: ObjectDict):
+def signal_handler_default(code: int, frame, state: ObjectDict, prev_signals: PrevSignals):
     logging.getLogger('sig.default').warning('Code=%s Frame=%s', code, frame)
+
+    if code in prev_signals:
+        fn = prev_signals[code]
+        print(code, fn)
+        logging.getLogger('sig.default.prev').warning('Run previous handler', code)
+        fn(code, frame)
 
     state.is_running = False
     raise SpecialException()
@@ -76,12 +82,21 @@ def run_server(running_instance, bind_urls: List[str], horizon_each=60.):
     state = ObjectDict(is_running=True)
 
     with contextlib.ExitStack() as stack:
-        stack.enter_context(
+        prev_signals2: PrevSignals = {}
+
+        codes = (signal.SIGTERM, signal.SIGINT)
+
+        prev_hdlrs = stack.enter_context(
             signal_context(
-                signals=(signal.SIGTERM, signal.SIGINT),
-                handler=partial(signal_handler_default, state=state)
+                signals=codes,
+                handler=partial(signal_handler_default, state=state, prev_signals=prev_signals2)
             )
         )
+
+        for code, prev_hdlr in zip(codes, prev_hdlrs):
+            prev_signals2[code] = prev_hdlr
+            logging.getLogger('signal.bind.default').debug('Code=%d Name=%s', code)
+
 
         # build transports
 

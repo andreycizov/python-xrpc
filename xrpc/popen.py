@@ -1,4 +1,5 @@
 import base64
+import os
 import pickle
 import subprocess
 import sys
@@ -38,6 +39,10 @@ def popen(fn, *args, **kwargs):
 
 
 def popen_main():
+    if os.environ.get('COVERAGE_PROCESS_START'):
+        import coverage
+        coverage.process_startup()
+
     def popen_signal_handler(frame, code):
         prev_handler()
 
