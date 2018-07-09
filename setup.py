@@ -7,7 +7,7 @@ test_reqs = [x.strip() for x in open('requirements-tests.txt').readlines()]
 
 setup(
     name='xrpc',
-    version='0.0.1a0',
+    version='0.0.1a1',
     author='Andrey Cizov',
     author_email='acizov@gmail.com',
     packages=find_packages(include=('xrpc', 'xrpc.*',)),
