@@ -1,9 +1,10 @@
 import logging
 import random
+from time import sleep
 from typing import Dict
 
 from xrpc.dsl import rpc, RPCType, regular, signal
-from xrpc.error import TerminationException
+from xrpc.error import TerminationException, HorizonPassedError
 from xrpc.runtime import sender, service
 
 # todo: please note that Request-Reply pattern does would not work with a service that tries
@@ -81,10 +82,11 @@ class BroadcastClientRPC:
 
     @regular()
     def broadcast(self) -> float:
-        s = service(BroadcastRPC, self.broadcast_addr)
-        s.arrived()
+        while True:
+            s = service(BroadcastRPC, self.broadcast_addr)
+            s.arrived()
 
-        return 0.05
+            return 0.05
 
 
 class BroadcastRPC:
@@ -92,7 +94,7 @@ class BroadcastRPC:
         self.origins: Dict[Origin, int] = {}
         self.origins_met = set()
 
-    @rpc()
+    @rpc(type=RPCType.Signalling)
     def arrived(self):
         sdr = sender()
         self.origins[sdr] = 5
