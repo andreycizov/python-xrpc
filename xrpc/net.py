@@ -2,6 +2,8 @@ import base64
 import json
 import struct
 import zlib
+
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import NamedTuple, Any
@@ -48,9 +50,10 @@ def time_unpack(body: bytes) -> datetime:
     return datetime(**{k: v for k, v in to_unpack if not k.startswith('_')}, tzinfo=pytz.utc)
 
 
-class RPCKey(NamedTuple):
-    timestamp: datetime
-    uuid: UUID
+@dataclass(eq=True, frozen=True)
+class RPCKey:
+    timestamp: datetime = field(default_factory=time_now)
+    uuid: UUID = field(default_factory=uuid4)
 
     @classmethod
     def new(cls):

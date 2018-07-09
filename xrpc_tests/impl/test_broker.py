@@ -47,12 +47,6 @@ def run_broker(lc, conf, broker_addr, res_addr):
                 conf,
                 res_addr
             )
-            # print('asdasdasd')
-            # x = build_generic_context(rpc)
-            # print(x)
-            # print('aasdasdas')
-            # import sys
-            # sys.stdout.flush()
             run_server(Broker[Request, Response], rpc, [broker_addr])
         except KeyboardInterrupt:
             return
