@@ -14,7 +14,7 @@ class Obj:
 
 
 def build_worker_serde():
-    a = SerdeSet.walk(SERVER_SERDE_INST, Obj, Obj.__module__)
+    a = SerdeSet.walk(SERVER_SERDE_INST, Obj)
 
     s = a.merge(a)
     return s.struct(SERVER_SERDE_INST)

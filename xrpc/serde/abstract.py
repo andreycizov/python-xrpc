@@ -1,7 +1,14 @@
+import sys
 from collections import deque
 from types import ModuleType
-from typing import NamedTuple, Any, List, _ForwardRef, _FinalTypingBase, _type_check, Optional, Union, Dict, Callable, \
-    _tp_cache, TypeVar, Type, Tuple, Deque, Set
+
+if sys.version_info >= (3, 7):
+    from typing import NamedTuple, Any, List, ForwardRef, _type_check, Optional, Union, Dict, Callable, \
+        _tp_cache, TypeVar, Type, Tuple, Deque, Set
+else:
+    from typing import Any, _ForwardRef, _FinalTypingBase, Optional, Union, List, Dict, _tp_cache, _type_check, \
+        Callable, \
+        NamedTuple, Tuple, TypeVar, Type
 
 from dataclasses import dataclass, field
 
@@ -38,7 +45,7 @@ class SerdeInst:
             except:
                 raise ValueError(f'GivenClass={t.__class__} GivenType={t} Matcher={x}')
         else:
-            raise ValueError(f'Could not match `{t}`')
+            raise ValueError(f'Could not match `{t}` `{t.__class__}`')
 
     def norm(self, t: Any, ctx: SerdeStepContext) -> Any:
         return self.match(t).norm(self, t, ctx)

@@ -7,7 +7,7 @@ from typing import NamedTuple, Optional, Dict, TypeVar, Generic
 from xrpc.serde import types
 from xrpc.serde.abstract import SerdeType, SerdeInst, SerdeSet
 from xrpc.serde.types import ForwardRefSerde, UnionSerde, AtomSerde, NoneSerde, UUIDSerde, ListSerde, DictSerde, \
-    EnumSerde, NamedTupleSerde, CallableArgsSerde, CallableArgsWrapper
+    EnumSerde, NamedTupleSerde, CallableArgsSerde, CallableArgsWrapper, TypeVarSerde
 
 ALL_TYPES = [
     ForwardRefSerde(),
@@ -17,6 +17,7 @@ ALL_TYPES = [
     UUIDSerde(),
     ListSerde(),
     DictSerde(),
+    TypeVarSerde(),
     EnumSerde(),
     NamedTupleSerde(),
 ]
@@ -31,26 +32,7 @@ class Simple2(NamedTuple):
 T = TypeVar('T')
 
 
-class Simple(NamedTuple('Simple', [('x', Optional[T]), ('z', Simple2), ]), Generic[T]):
-    pass
-
-
-
 class TestWalkGeneric(unittest.TestCase):
-    def test_empty(self):
-        i = SerdeInst(ALL_TYPES)
-
-        x = SerdeSet.walk(i, Simple, sys.modules[__name__])
-
-        pprint(x)
-
-        y = x.struct(i)
-
-        pprint(y)
-
-        z = y.deserialize(Simple, {'x': 5, 'z': {'y': 'abc'}})
-
-        pprint(z)
 
     def test_caller(self):
         i = SerdeInst(CALL_TYPES)
@@ -70,8 +52,8 @@ class TestWalkGeneric(unittest.TestCase):
         wrapper = CallableArgsWrapper.from_func(a)
         wrapper2 = CallableArgsWrapper.from_func(obj.a)
 
-        x1 = SerdeSet.walk(i, wrapper, sys.modules[__name__])
-        x2 = SerdeSet.walk(i, wrapper2, sys.modules[__name__])
+        x1 = SerdeSet.walk(i, wrapper)
+        x2 = SerdeSet.walk(i, wrapper2)
 
         x = x1.merge(x2)
 

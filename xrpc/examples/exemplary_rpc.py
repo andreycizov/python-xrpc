@@ -17,7 +17,7 @@ from xrpc.transport import Origin
 class ExemplaryRPC:
     def __init__(self):
         # todo save the required local state here
-        pass
+        self.should_exit = False
 
     @rpc(RPCType.Signalling)
     def move_something(self, id: int, *xyzargs: int, pop: str, pip: int = 2, **zzargs: int):
@@ -53,6 +53,16 @@ class ExemplaryRPC:
     def regularly_executable_def2(self, id: int = 1, b=6, a=5) -> float:
         print('regularly_executable_def2')
         return 3
+
+    @rpc(RPCType.Repliable)
+    def exit(self):
+        self.should_exit = True
+
+    @regular()
+    def exit_checket(self) -> float:
+        if self.should_exit:
+            raise TerminationException()
+        return 5
 
     @signal()
     def on_exit(self) -> bool:

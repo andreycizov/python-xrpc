@@ -17,7 +17,7 @@ setup(
     include_package_data=True,
     long_description=readme,
     install_requires=reqs,
-    test_suite='tests',
+    test_suite='xrpc_tests',
     tests_require=test_reqs,
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',

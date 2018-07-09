@@ -17,31 +17,40 @@ def run_server_b(addr):
     run_server(BroadcastRPC(), [addr])
 
 
+def wait_items(waiting, max_wait=20):
+    wait_till = time_now() + timedelta(seconds=max_wait)
+    waiting = list(waiting)
+
+    while wait_till > time_now() and len(waiting):
+        to_remove = []
+        for x in waiting:
+            try:
+                x.get(0)
+
+                if len(waiting) == 0:
+                    return
+                to_remove.append(x)
+            except multiprocessing.context.TimeoutError:
+                print('timout', waiting)
+        for x in to_remove:
+            waiting.remove(x)
+        sleep(1)
+
+    if len(waiting):
+        raise TimeoutError(f'{waiting}')
+
+
 class TestTransform(unittest.TestCase):
     def test_udp(self):
         p = Pool(2)
-        wait_till = time_now() + timedelta(seconds=20)
         url_a = 'udp://127.0.0.1:11134'
         url_b = 'udp://127.0.0.1:11146'
         a = p.apply_async(run_server_a, args=(url_a, url_b))
         b = p.apply_async(run_server_b, args=(url_b,))
 
-        total_get = 0
         waiting = [a, b]
 
-        while wait_till > time_now():
-            to_remove = []
-            for x in waiting:
-                try:
-                    x.get(0)
-                    total_get += 1
+        wait_items(waiting)
 
-                    if total_get == len([a,b]):
-                        return
-                    to_remove.append(x)
-                except multiprocessing.context.TimeoutError:
-                    print('timout', waiting)
-            for x in to_remove:
-                waiting.remove(x)
-            sleep(1)
-        raise TimeoutError()
+        p.close()
+        p.join()

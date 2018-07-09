@@ -1,0 +1,17 @@
+language: python
+python:
+- 3.6
+install:
+- pip install -U tox tox-travis codecov
+script: tox
+after_success:
+- codecov
+deploy:
+  provider: pypi
+  user: andreycizov
+  password:
+    secure: klCxclI43qKie20o4qYqrFMc3dEh16AVdTCZPxtvKhGFjnL3fv7VO5UJ2ATdgvTCQRRmgR4z4+sVVQGXdTQrV1avCP62Xf/wmggKWj1l8HzEgzFnGuQ/q/hZ4jRbNPnREjDbMJNjuY97bILVLP4IynZwSTQHP2ylQKw0yKQ7cX4EMNYIX9iyaFpRiqKEtYYETc0T9e3svDU1D0KVtoeyZCa7qGe6IIsm58yWtU+Kd+8mPjUjBf9yBpxvlNVBBZL5H6+vvtaxm0D32//CSQJdZp/WUrUXsyw5wVflREG2mTFpMshXqkMrYXLUXGsS1fQf2cfk211R5MLlpG6vqoRYPmVSIPknn3qZtxTHM1/atiNs4av3IwKbaz0Tc9Qw+gOK9Xk6qw9HRrErwg4pDjGb4JWU+6ZKcumD3y49k/vuzO/LSQXWVEiy0RCAN/3VyQGdPgmP37QFJnSav0UoBaEI2vsz5WOadKpav1KLKFIWIH4oIbVW5P/WiEuWLr5owLx06s26v3jnLbuaWRvmxwWQ3yQHV0GPN5gQ3Ji1xFDluvDxyz6Dbc6QXNgGDwxvK5WvRIfkRUOpV54O1w/D08aLoQ+ziEAZH4WKO8rNnOZeagfUA+/LVB2C/xtniI2uSYxHLFE1ZMOEuYC3oWhZ1/nqItnuWq4SaoVzqktvG3Ukayk=
+  on:
+    tags: true
+    distributions: sdist bdist_wheel
+    repo: andreycizov/python-protobuf-gen
