@@ -33,6 +33,14 @@ class LoggerSetup(NamedTuple):
     level_names: LoggerLevelList
     urls: List[str]
 
+    @classmethod
+    def current(cls):
+        return LoggerSetup(
+            LL(None, logging.getLogger().level),
+            [LL(name, logger.level) for name, logger in logging.root.manager.loggerDict.items()],
+            []
+        )
+
     def set_level(self, logger: logging.Logger) -> LoggerLevel:
         r = logger.level
         logger.setLevel(self.level.level)
@@ -106,7 +114,7 @@ def type_logger(url) -> str:
         raise argparse.ArgumentTypeError(url.scheme)
 
 
-LOGGER_PREFIX = 'logger'
+LOGGER_PREFIX = 'logger_'
 
 
 def logging_parser(parser: argparse.ArgumentParser, preset_levels: LoggerLevelList = DEFAULT_LOGGER_DEFN):
@@ -121,7 +129,7 @@ def logging_parser(parser: argparse.ArgumentParser, preset_levels: LoggerLevelLi
     parser.add_argument(
         '-L',
         '--log',
-        dest=f'{LOGGER_PREFIX}.level',
+        dest=f'{LOGGER_PREFIX}level',
         type=type_level,
         default=LoggerLevel(None, logging.INFO),
         metavar="LEVEL",
@@ -131,7 +139,7 @@ def logging_parser(parser: argparse.ArgumentParser, preset_levels: LoggerLevelLi
 
     parser.add_argument(
         '-LL',
-        dest=f'{LOGGER_PREFIX}.level_names',
+        dest=f'{LOGGER_PREFIX}level_names',
         type=type_level_name,
         default=preset_levels,
         metavar="LEVEL_SPEC",
@@ -143,7 +151,7 @@ def logging_parser(parser: argparse.ArgumentParser, preset_levels: LoggerLevelLi
 
     parser.add_argument(
         '--logger',
-        dest=f'{LOGGER_PREFIX}.urls',
+        dest=f'{LOGGER_PREFIX}urls',
         default=[],
         action="append",
         type=type_logger,
@@ -221,7 +229,8 @@ def logging_config():
     if TL.logging:
         return TL.logging
     else:
-        assert False, 'Need to run logging_setup first'
+        logging.warning('logging_config called without previously setting up the logging')
+        return LoggerSetup.current()
 
 
 @contextmanager
@@ -286,7 +295,7 @@ def cli_main(fn, parser: argparse.ArgumentParser, argv=None):
 
     args: argparse.Namespace = parser.parse_args(argv)
 
-    logger_args, fn_args = _dict_split_prefix(vars(args), f'{LOGGER_PREFIX}.')
+    logger_args, fn_args = _dict_split_prefix(vars(args), f'{LOGGER_PREFIX}')
 
     fn_args[LOGGER_PREFIX] = LoggerSetup(**logger_args)
 

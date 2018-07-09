@@ -66,7 +66,7 @@ def service(obj: Type[T], addr: Origin, conf: ClientConfig = ClientConfig()) -> 
     if obj in service_cache:
         defn = service_cache[obj]
     else:
-        defn = ServiceDefn.from_obj(obj, override_method=True)
+        defn = ServiceDefn.from_obj(obj)
         service_cache[obj] = defn
 
     return ServiceWrapper(defn, conf, ctx.transport_stack, addr)

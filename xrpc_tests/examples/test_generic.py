@@ -1,6 +1,9 @@
 import logging
 import unittest
+from contextlib import contextmanager
 from multiprocessing.pool import Pool
+from typing import TypeVar, Type, ContextManager
+
 from time import sleep
 
 from xrpc.client import build_wrapper, ClientConfig
@@ -23,6 +26,21 @@ def run_times():
         except:
             logging.getLogger(__name__).exception('')
             raise
+
+
+T = TypeVar('T')
+
+
+@contextmanager
+def build_ts(rpc: Type[T], addr='udp://127.0.0.1:7483', conf=ClientConfig(timeout_total=5)) -> ContextManager[T]:
+    t = Transport.from_url('udp://127.0.0.1')
+
+    with t:
+        ts = RPCTransportStack([t])
+        pt = ServiceDefn.from_obj(rpc)
+        r: rpc = build_wrapper(pt, ts, addr, conf=conf)
+
+        yield r
 
 
 def run_times_2():

@@ -8,9 +8,17 @@ from functools import partial
 from inspect import FullArgSpec
 from types import ModuleType
 
+from xrpc.generic import build_generic_context as _build_generic_context
+
+
+def build_generic_context(*args):
+    _, r = _build_generic_context(*args)
+    return r
+
+
 if sys.version_info >= (3, 7):
     from typing import Any, ForwardRef, Optional, Union, List, Dict, _tp_cache, _type_check, Callable, \
-        NamedTuple, Tuple, TypeVar, _SpecialForm
+        NamedTuple, Tuple, TypeVar, _SpecialForm, Iterable
 else:
     from typing import Any, _ForwardRef, _FinalTypingBase, Optional, Union, List, Dict, _tp_cache, _type_check, \
         Callable, \
@@ -321,7 +329,22 @@ class DateTimeSerde(SerdeType):
         return lambda val: format(val, ISO8601)
 
 
+class ListDeserializer(SerdeTypeDeserializer):
+    cls_coll = list
+
+    def __call__(self, val: Union[list, dict]) -> Any:
+        self.d, *_ = self.deps
+        return self.cls_coll(self.d(v) for v in val)
+
+
+class ListSerializer(ListDeserializer, SerdeTypeSerializer):
+    pass
+
+
 class ListSerde(SerdeType):
+    cls_deserializer = ListDeserializer
+    cls_serializer = ListSerializer
+
     def match(self, t: Any) -> bool:
         if inspect.isclass(t):
             return issubclass(t, List)
@@ -334,19 +357,38 @@ class ListSerde(SerdeType):
         st = i.norm(st, ctx)
         return SerdeNode(List[st], [st])
 
-    def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
-        def list_deser(val):
-            d, *_ = deps
-            return [d(v) for v in val]
 
-        return list_deser
+class TupleDeserializer(ListDeserializer):
+    cls_coll = tuple
 
-    def serializer(self, t: Any, deps: List[SER]) -> SER:
-        def list_ser(val):
-            s, *_ = deps
-            return [s(v) for v in val]
 
-        return list_ser
+class TupleSerializer(TupleDeserializer, SerdeTypeSerializer):
+
+    def __call__(self, val: Union[list, dict]) -> Any:
+        return list(super().__call__(val))
+
+
+class TupleSerde(SerdeType):
+    cls_deserializer = TupleDeserializer
+    cls_serializer = TupleSerializer
+
+    def match(self, t: Any) -> bool:
+        t, _ = _build_generic_context(t)
+
+        if sys.version_info >= (3, 7):
+            if hasattr(t, '__origin__'):
+                return t.__origin__ is tuple
+
+        if inspect.isclass(t):
+            return issubclass(t, Tuple)
+        else:
+            return False
+
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        assert hasattr(t, '__args__')
+        st, = t.__args__
+        st = i.norm(st, ctx)
+        return SerdeNode(Tuple[st], [st])
 
 
 class DictSerde(SerdeType):
@@ -500,33 +542,33 @@ class DataclassSerializer(SerdeTypeDeserializer):
         return NamedTupleSerializer.__call__(self, val)
 
 
-def build_generic_context(t, ctx):
-    def mmaps(pars, args):
-        maps = dict(zip(pars, args))
-
-        maps = {k: ctx.generic_vals.get(k, v) if isinstance(v, TypeVar) else v for k, v in maps.items()}
-
-        uninst = {k: isinstance(maps[k], TypeVar) for k in maps}
-
-        if any(uninst.values()):
-            raise ValueError(f'Not all generic parameters are instantiated: {uninst}')
-
-        return maps
-
-    if sys.version_info >= (3, 7):
-        if not hasattr(t, '__origin__'):
-            return ctx
-
-        maps = mmaps(t.__origin__.__parameters__, t.__args__)
-
-        return SerdeStepContext(mod=ctx.mod, generic_vals={**ctx.generic_vals, **maps})
-    else:
-        if not hasattr(t, '_gorg'):
-            return ctx
-
-        maps = mmaps(t._gorg.__parameters__, t.__args__)
-
-        return SerdeStepContext(mod=ctx.mod, generic_vals={**ctx.generic_vals, **maps})
+# def build_generic_context(t, ctx):
+#     def mmaps(pars, args):
+#         maps = dict(zip(pars, args))
+#
+#         maps = {k: ctx.generic_vals.get(k, v) if isinstance(v, TypeVar) else v for k, v in maps.items()}
+#
+#         uninst = {k: isinstance(maps[k], TypeVar) for k in maps}
+#
+#         if any(uninst.values()):
+#             raise ValueError(f'Not all generic parameters are instantiated: {uninst}')
+#
+#         return maps
+#
+#     if sys.version_info >= (3, 7):
+#         if not hasattr(t, '__origin__'):
+#             return ctx
+#
+#         maps = mmaps(t.__origin__.__parameters__, t.__args__)
+#
+#         return SerdeStepContext(mod=ctx.mod, generic_vals={**ctx.generic_vals, **maps})
+#     else:
+#         if not hasattr(t, '_gorg'):
+#             return ctx
+#
+#         maps = mmaps(t._gorg.__parameters__, t.__args__)
+#
+#         return SerdeStepContext(mod=ctx.mod, generic_vals={**ctx.generic_vals, **maps})
 
 
 class DataclassSerde(SerdeType):
@@ -630,12 +672,107 @@ class CallableRetWrapper(NamedTuple):
         return hash(r)
 
 
+def build_types(spec: FullArgSpec, is_method=False, allow_missing=False):
+    missing_args = []
+    map = {}
+
+    args = spec.args
+
+    def get_annot(name):
+        if name not in spec.annotations:
+            missing_args.append(name)
+            return None
+        return spec.annotations[name]
+
+    if is_method:
+        args = args[1:]
+
+    for arg in args:
+        map[arg] = get_annot(arg)
+
+    if spec.varargs:
+        map[ARGS_VAR] = get_annot(spec.varargs)
+
+    if spec.varkw:
+        map[ARGS_KW] = get_annot(spec.varkw)
+
+    if spec.kwonlyargs:
+        for arg in spec.kwonlyargs:
+            map[arg] = get_annot(arg)
+
+    if spec.annotations and 'return' in spec.annotations:
+        map[ARGS_RET] = spec.annotations['return']
+    else:
+        map[ARGS_RET] = None
+
+    if not allow_missing and len(missing_args):
+        raise NotImplementedError(
+            f'Can not find annotations for arguments named: `{missing_args}`')
+
+    return map
+
+
+def pair_spec(spec: FullArgSpec, is_method, *args, **kwargs) -> Tuple[Tuple[Any], Dict[str, Any]]:
+    # pair function arguments to their names
+
+    # we need to "eat" the arguments correctly (and then map them to something else).
+    map_args = list(spec.args)
+    kwonlyargs = list(spec.kwonlyargs) if spec.kwonlyargs else []
+
+    mapped_args = list()
+
+    if is_method:
+        assert map_args[0] == 'self'
+        map_args = map_args[1:]
+
+    vararg_ctr = 0
+
+    for arg in args:
+        if len(map_args):
+            curr_arg, map_args = map_args[0], map_args[1:]
+
+            yield curr_arg, None
+
+            mapped_args.append(curr_arg)
+        elif spec.varargs:
+            yield ARGS_VAR, vararg_ctr
+            vararg_ctr += 1
+
+        else:
+            raise ValueError(f'Could not find mapping for argument `{arg}`')
+
+    for kwarg_name, kwarg_val in kwargs.items():
+        has_matched = False
+
+        if kwarg_name in map_args:
+            map_args.remove(kwarg_name)
+            has_matched = True
+        elif kwarg_name in kwonlyargs:
+            kwonlyargs.remove(kwarg_name)
+            has_matched = True
+
+        if not has_matched:
+            if spec.varkw:
+                assert kwarg_name not in mapped_args, kwarg_name
+                yield ARGS_KW, kwarg_name
+            else:
+                raise ValueError(f'Function does not accept `{kwarg_name}`')
+        else:
+            yield kwarg_name, None
+
+    assert len(map_args) == 0, map_args
+
+    # return r_args, r_kwargs
+
+
+ARGS_VAR = '$var'
+ARGS_KW = '$kw'
+ARGS_RET = '$ret'
+
+
 class CallableArgsSerde(SerdeType):
     # fullargspect -> Type (or a function)
     # args_kwargs -> INPUT
-
-    args_var = '$var'
-    args_kw = '$kw'
 
     def match(self, t: Any) -> bool:
         return isinstance(t, CallableArgsWrapper)
@@ -661,10 +798,10 @@ class CallableArgsSerde(SerdeType):
             map[arg] = get_annot(arg)
 
         if at.varargs:
-            map[self.args_var] = get_annot(at.varargs)
+            map[ARGS_VAR] = get_annot(at.varargs)
 
         if at.varkw:
-            map[self.args_kw] = get_annot(at.varkw)
+            map[ARGS_KW] = get_annot(at.varkw)
 
         if at.kwonlyargs:
             for arg in at.kwonlyargs:
@@ -698,6 +835,8 @@ class CallableArgsSerde(SerdeType):
             return deps[map[name]]
 
         def callable_deserializer(val: list) -> list:
+            # given a val, pair the values with the types
+
             val: Tuple[List[Any], Dict[str, Any]]
             args, kwargs = val
 
@@ -716,14 +855,14 @@ class CallableArgsSerde(SerdeType):
 
                     r_args = r_args + (get_map(curr_arg)(arg),)
                 elif t.spec.varargs:
-                    r_args = r_args + (get_map(self.args_var)(arg),)
+                    r_args = r_args + (get_map(ARGS_VAR)(arg),)
                 else:
                     raise ValueError(f'Could not find mapping for argument `{arg}`')
 
             for kwarg_name, kwarg_val in kwargs.items():
                 if kwarg_name not in map:
                     if at.varkw:
-                        r_kwargs[kwarg_name] = get_map(self.args_kw)(kwarg_val)
+                        r_kwargs[kwarg_name] = get_map(ARGS_KW)(kwarg_val)
                     else:
                         raise ValueError(f'Function does not accept `{kwarg_name}`')
                 else:
@@ -760,14 +899,14 @@ class CallableArgsSerde(SerdeType):
 
                     r_args = r_args + (get_map(curr_arg)(arg),)
                 elif t.spec.varargs:
-                    r_args = r_args + (get_map(self.args_var)(arg),)
+                    r_args = r_args + (get_map(ARGS_VAR)(arg),)
                 else:
                     raise ValueError(f'Could not find mapping for argument `{arg}`')
 
             for kwarg_name, kwarg_val in kwargs.items():
                 if kwarg_name not in map:
                     if at.varkw:
-                        r_kwargs[kwarg_name] = get_map(self.args_kw)(kwarg_val)
+                        r_kwargs[kwarg_name] = get_map(ARGS_KW)(kwarg_val)
                     else:
                         raise ValueError(f'Function does not accept `{kwarg_name}`')
                 else:

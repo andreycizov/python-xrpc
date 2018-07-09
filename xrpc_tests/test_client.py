@@ -15,7 +15,7 @@ class TestClient(unittest.TestCase):
 
         with t:
             ts = RPCTransportStack([t])
-            pt = ServiceDefn.from_obj(rpc, override_method=True)
+            pt = ServiceDefn.from_obj(rpc)
             with self.assertRaises(error.TimeoutError):
                 r: ExemplaryRPC = build_wrapper(pt, ts, 'udp://127.0.0.1:7483', conf=ClientConfig(timeout_total=2.))
 

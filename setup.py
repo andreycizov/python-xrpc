@@ -1,9 +1,14 @@
+import sys
+
 from setuptools import setup, find_packages
 
 readme = open('README.rst').read()
 history = open('HISTORY.rst').read()
 reqs = [x.strip() for x in open('requirements.txt').readlines()]
 test_reqs = [x.strip() for x in open('requirements-tests.txt').readlines()]
+
+if sys.version_info >= (3, 7):
+    reqs = [x for x in reqs if not x.rstrip().startswith('dataclasses')]
 
 setup(
     name='xrpc',

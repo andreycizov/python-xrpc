@@ -1,4 +1,5 @@
 import multiprocessing
+import subprocess
 import unittest
 from contextlib import contextmanager
 from datetime import timedelta
@@ -41,12 +42,12 @@ def wait_items(waiting, max_wait=40):
         to_remove = []
         for x in waiting:
             try:
-                x.get(0)
+                x.wait(0)
 
-                if len(waiting) == 0:
-                    return
                 to_remove.append(x)
             except multiprocessing.context.TimeoutError:
+                pass
+            except subprocess.TimeoutExpired:
                 pass
         for x in to_remove:
             waiting.remove(x)

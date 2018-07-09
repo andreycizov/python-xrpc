@@ -206,7 +206,7 @@ def run_server(cls, running_instance, bind_urls: List[str], horizon_each=60.):
         socketio_states = {}
 
         for k, (conf, fn) in socketios.items():
-            socketio_states[k] = fn()
+            socketio_states[k] = fn(running_instance)
 
         # end of builds
 

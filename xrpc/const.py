@@ -17,4 +17,5 @@ SERVER_SERDE_INST = SerdeInst([
     types.EnumSerde(),
     types.DataclassSerde(),
     types.NamedTupleSerde(),
+    types.TupleSerde(),
 ])

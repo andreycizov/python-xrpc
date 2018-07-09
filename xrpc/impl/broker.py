@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+from inspect import getfullargspec
+
 import shutil
 import socket
 import tempfile
@@ -9,7 +11,7 @@ from collections import deque
 from datetime import datetime
 from itertools import count
 from time import sleep
-from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic
+from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple
 
 from xrpc.logging import logging_config, LoggerSetup, logging_setup, circuitbreaker
 from xrpc.popen import popen
@@ -19,7 +21,9 @@ from xrpc.const import SERVER_SERDE_INST
 from xrpc.dsl import rpc, RPCType, regular, socketio, signal
 from xrpc.error import HorizonPassedError, TimeoutError
 from xrpc.runtime import service, sender
-from xrpc.serde.abstract import SerdeSet
+from xrpc.serde.abstract import SerdeSet, SerdeInst, SerdeStruct
+from xrpc.serde.types import CallableArgsSerde, CallableArgsWrapper, CallableRetWrapper, pair_spec, build_types, \
+    ARGS_RET
 from xrpc.transport import recvfrom_helper, Packet, Origin
 from xrpc.util import time_now
 
@@ -69,7 +73,10 @@ class JobReturn(NamedTuple):
     payload: bytes
 
 
-WorkerCallable = Callable[[bytes], bytes]
+RequestType = TypeVar('RequestType')
+ResponseType = TypeVar('ResponseType')
+
+WorkerCallable = Callable[[RequestType], ResponseType]
 
 
 def build_worker_serde():
@@ -80,7 +87,15 @@ def build_worker_serde():
     return s.struct(SERVER_SERDE_INST)
 
 
-WorkerSerde = build_worker_serde()
+# WorkerSerde = build_worker_serde()
+
+def get_func_types(fn: WorkerCallable) -> Tuple[Type[RequestType], Type[ResponseType]]:
+    spec = getfullargspec(fn)
+
+    annot = build_types(spec, False, allow_missing=True)
+    arg_name, _ = next(pair_spec(spec, False, None))
+
+    return annot[arg_name], annot[ARGS_RET]
 
 
 def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, path: str):
@@ -94,14 +109,21 @@ def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, path: str):
         connection, origin = sock.accept()
         logging.getLogger('worker_inst.accept').debug('%s', origin)
 
+        # use the callable's type hints in order to serialize and deserialize parameters
+
+        cls_req, cls_res = get_func_types(fn)
+
+        serde = build_serde(cls_req, cls_res)
+
         try:
             for x in recvfrom_helper(connection, logger_name='worker_inst.net.trace.raw'):
                 logging.getLogger('worker_inst.net.trace.raw.i').debug('[%d] %s %s', len(x.data), x.addr,
                                                                        x.data)
-                jp: JobParams = WorkerSerde.deserialize(JobParams, json.loads(x.data))
+                jp: cls_req = serde.deserialize(cls_req, json.loads(x.data))
 
-                ret = JobReturn(fn(jp.payload))
-                op = Packet(None, json.dumps(WorkerSerde.serialize(JobReturn, ret)).encode())
+                ret = fn(jp)
+
+                op = Packet(None, json.dumps(serde.serialize(cls_res, ret)).encode())
 
                 logging.getLogger('worker_inst.net.trace.raw.o').debug('[%d] %s %s', len(op.data), op.addr,
                                                                        op.data)
@@ -111,20 +133,29 @@ def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, path: str):
             logging.getLogger('worker_inst').debug('Mildly inconvenient exit')
 
 
-class Worker:
-    def __init__(self, conf: BrokerConf, broker_addr: Origin, fn: WorkerCallable):
-        """
+def build_serde(req: Type[ResponseType], res: Type[ResponseType]) -> SerdeStruct:
+    a = SerdeSet.walk(SERVER_SERDE_INST, req)
+    b = SerdeSet.walk(SERVER_SERDE_INST, res)
 
-        :param conf:
-        :param broker_addr:
-        :param fn: must not be in the __main__ runnable
-        """
+    return a.merge(b).struct(SERVER_SERDE_INST)
+
+
+class Worker(Generic[RequestType, ResponseType]):
+    def __init__(
+            self,
+            cls_req: Type[RequestType], cls_res: Type[ResponseType],
+            conf: BrokerConf, broker_addr: Origin, fn: WorkerCallable[RequestType, ResponseType]):
+        self.cls_req = cls_req
+        self.cls_res = cls_res
+
+        self.serde = build_serde(self.cls_req, self.cls_res)
+
         self.conf = conf
         self.broker_addr = broker_addr
         self.assigned: Optional[JobParams] = None
 
         self.dir = None
-        self.dir = tempfile.mkdtemp(dir='.')
+        self.dir = tempfile.mkdtemp()
 
         unix_url = os.path.join(self.dir, 'unix.sock')
         self.unix_url = unix_url
@@ -148,15 +179,15 @@ class Worker:
                 sleep(1)
 
     @rpc()
-    def get_assigned(self) -> Optional[JobParams]:
+    def get_assigned(self) -> Optional[ResponseType]:
         return self.assigned
 
     @rpc(RPCType.Durable)
-    def assign(self, pars: JobParams):
+    def assign(self, pars: RequestType):
         if self.assigned is not None:
             raise ValueError('Double assignment')
 
-        op = Packet(self.unix_url, json.dumps(WorkerSerde.serialize(JobParams, pars)).encode())
+        op = Packet(self.unix_url, json.dumps(self.serde.serialize(self.cls_req, pars)).encode())
 
         logging.getLogger('net.trace.raw.o').debug('[%d] %s %s', len(op.data), op.addr, op.data)
 
@@ -165,7 +196,7 @@ class Worker:
 
     @regular()
     def heartbeat(self) -> float:
-        s = service(Broker, self.broker_addr)
+        s = service(Broker[self.cls_req, self.cls_res], self.broker_addr)
         s.remind()
 
         return self.conf.heartbeat
@@ -175,13 +206,13 @@ class Worker:
         for x in recvfrom_helper(self.socket):
             logging.getLogger('net.trace.raw.i').debug('[%d] %s %s', len(x.data), x.addr, x.data)
 
-            ret = WorkerSerde.deserialize(JobReturn, json.loads(x.data))
+            ret = self.serde.deserialize(self.cls_res, json.loads(x.data))
 
             logging.getLogger('bg').debug('Returned %s', x)
 
             self.assigned = None
 
-            s = service(Broker, self.broker_addr)
+            s = service(Broker[self.cls_req, self.cls_res], self.broker_addr)
 
             try:
                 s.done(ret)
@@ -193,7 +224,7 @@ class Worker:
     @signal()
     def exit(self):
         try:
-            s = service(Broker, self.broker_addr, ClientConfig(timeout_total=1.))
+            s = service(Broker[self.cls_req, self.cls_res], self.broker_addr, ClientConfig(timeout_total=1.))
             s.leaving()
         except TimeoutError:
             logging.getLogger('exit').error('Could not contact broker')
@@ -215,25 +246,32 @@ class JobState(NamedTuple):
         return JobState(created=time_now())
 
 
-class BrokerResult:
+class BrokerResult(Generic[ResponseType]):
     @rpc(RPCType.Durable)
-    def finished(self, job: JobReturn):
+    def finished(self, job: ResponseType):
         logging.getLogger('finished').warning('unused %s', job)
 
 
-class Broker:
-    def __init__(self, conf: BrokerConf, url_results: Optional[str] = None):
+class Broker(Generic[RequestType, ResponseType]):
+    def __init__(
+            self,
+            cls_req: Type[RequestType], cls_res: Type[ResponseType],
+            conf: BrokerConf, url_results: Optional[str] = None
+    ):
+        self.cls_req = cls_req
+        self.cls_res = cls_res
+
         self.conf = conf
         self.url_results = url_results
 
         self.workers: Dict[Origin, WorkerState] = {}
 
-        self.jobs: Dict[JobParams, JobState] = {}
-        self.jobs_pending: Deque[JobParams] = deque()
+        self.jobs: Dict[RequestType, JobState] = {}
+        self.jobs_pending: Deque[RequestType] = deque()
 
-        self.workers_jobs: Dict[Origin, JobParams] = {}
+        self.workers_jobs: Dict[Origin, RequestType] = {}
 
-    def job_new(self, pars: JobParams):
+    def job_new(self, pars: RequestType):
         logging.getLogger('job_new').debug('%s', pars)
 
         self.jobs[pars] = JobState.new()
@@ -255,7 +293,7 @@ class Broker:
             pars = self.jobs_pending.popleft()
             wrkr = free_workers.pop()
 
-            s = service(Worker, wrkr, ClientConfig(timeout_total=1.))
+            s = service(Worker[self.cls_req, self.cls_res], wrkr, ClientConfig(timeout_total=1.))
 
             try:
                 s.assign(pars)
@@ -300,8 +338,12 @@ class Broker:
 
         self.jobs_try_assign()
 
+    @rpc()
+    def stats(self) -> Tuple[int]:
+        return len(self.workers),
+
     @rpc(RPCType.Durable)
-    def assign(self, pars: JobParams):
+    def assign(self, pars: RequestType):
         """
         Assign a job to the broker
         :param pars:
@@ -313,9 +355,9 @@ class Broker:
             logging.getLogger('assign').warning('Job is still working %s', pars)
 
     @rpc(RPCType.Durable)
-    def done(self, jr: JobReturn):
+    def done(self, jr: ResponseType):
         if self.url_results:
-            s = service(BrokerResult, self.url_results)
+            s = service(BrokerResult[self.cls_res], self.url_results)
             s.finished(jr)
         else:
             logging.getLogger('done').error('Return type not used %s', jr)
