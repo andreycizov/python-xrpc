@@ -1,6 +1,6 @@
-============
+====
 xrpc
-============
+====
 
 .. image:: https://img.shields.io/pypi/v/xrpc.svg
         :target: https://pypi.python.org/pypi/xrpc
