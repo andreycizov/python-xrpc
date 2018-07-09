@@ -25,3 +25,8 @@ Core functionality
 
 .. toctree::
     api/dsl
+
+The christmas-tree example
+__________________________
+
+.. literalinclude:: ../xrpc/examples/exemplary_rpc.py
