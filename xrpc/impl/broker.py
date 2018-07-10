@@ -1,7 +1,8 @@
 import json
 import logging
 import os
-from inspect import getfullargspec
+import types
+from inspect import getfullargspec, ismethod
 from subprocess import TimeoutExpired
 
 import shutil
@@ -21,7 +22,7 @@ from xrpc.abstract import MutableInt
 from xrpc.client import ClientConfig
 from xrpc.const import SERVER_SERDE_INST
 from xrpc.dsl import rpc, RPCType, regular, socketio, signal
-from xrpc.error import HorizonPassedError, TimeoutError
+from xrpc.error import HorizonPassedError, TimeoutError, TerminationException
 from xrpc.runtime import service, sender
 from xrpc.serde.abstract import SerdeSet, SerdeStruct
 from xrpc.serde.types import pair_spec, build_types, ARGS_RET
@@ -91,10 +92,14 @@ def build_worker_serde():
 # WorkerSerde = build_worker_serde()
 
 def get_func_types(fn: WorkerCallable) -> Tuple[Type[RequestType], Type[ResponseType]]:
-    spec = getfullargspec(fn)
+    if not isinstance(fn, types.FunctionType):
+        print(fn)
+        fn = fn.__call__
 
-    annot = build_types(spec, False, allow_missing=True)
-    arg_name, _ = next(pair_spec(spec, False, None))
+    spec = getfullargspec(fn)
+    is_method = ismethod(fn)
+    annot = build_types(spec, is_method, allow_missing=True)
+    arg_name, _ = next(pair_spec(spec, is_method, None))
 
     return annot[arg_name], annot[ARGS_RET]
 
@@ -118,6 +123,8 @@ def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, path: str):
 
         cls_req, cls_res = get_func_types(fn)
 
+        print(cls_req, cls_res)
+
         serde = build_serde(cls_req, cls_res)
 
         try:
@@ -136,6 +143,8 @@ def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, path: str):
                 connection.send(op.pack())
         except KeyboardInterrupt:
             logging.getLogger('worker_inst').debug('Mildly inconvenient exit')
+        finally:
+            sock.close()
 
 
 def build_serde(req: Type[ResponseType], res: Type[ResponseType]) -> SerdeStruct:
@@ -201,6 +210,13 @@ class Worker(Generic[RequestType, ResponseType]):
 
     @regular()
     def heartbeat(self) -> float:
+        try:
+            self.inst.wait(0)
+            self.exit()
+            raise TerminationException()
+        except TimeoutExpired:
+            pass
+
         s = service(Broker[self.cls_req, self.cls_res], self.broker_addr)
         s.remind()
 
@@ -262,7 +278,13 @@ class BrokerResult(Generic[ResponseType]):
         logging.getLogger('finished').warning('unused %s', job)
 
 
-class Broker(Generic[RequestType, ResponseType]):
+class BrokerEntry(Generic[ResponseType]):
+    @rpc(RPCType.Durable)
+    def assign(self, pars: RequestType):
+        pass
+
+
+class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
     def __init__(
             self,
             cls_req: Type[RequestType], cls_res: Type[ResponseType],
@@ -367,8 +389,12 @@ class Broker(Generic[RequestType, ResponseType]):
     @rpc(RPCType.Durable)
     def done(self, jr: ResponseType):
         if self.url_results:
-            s = service(BrokerResult[self.cls_res], self.url_results)
-            s.finished(jr)
+            try:
+                s = service(BrokerResult[self.cls_res], self.url_results)
+
+                s.finished(jr)
+            except HorizonPassedError:
+                pass
         else:
             logging.getLogger('done').error('Return type not used %s', jr)
 

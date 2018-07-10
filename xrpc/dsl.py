@@ -77,3 +77,4 @@ class socketio():
 
 # todo unhandled_exception handler
 # todo startup handler
+# todo exit handler

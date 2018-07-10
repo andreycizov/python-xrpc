@@ -1,7 +1,6 @@
 import logging
 import signal
 import unittest
-from multiprocessing.pool import Pool
 from time import sleep
 
 from dataclasses import dataclass
@@ -84,8 +83,10 @@ def run_results(lc, addr):
             logging.exception('')
             raise
 
+
 def build_logging():
     return logging_setup(LoggerSetup(LL(None, logging.DEBUG), [], ['stream:///stderr']))
+
 
 class TestBroker(unittest.TestCase):
     def test_udp(self):

@@ -278,6 +278,10 @@ class TypeVarSerde(SerdeType):
 
 class NoneSerde(SerdeType):
     def match(self, t: Any) -> bool:
+        if t == type(None):
+            return True
+        if t is None:
+            return True
         return issubclass(type(t), type(None))
 
     def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
@@ -466,7 +470,7 @@ class NamedTupleDeserializer(SerdeTypeDeserializer):
                 r[f] = self.deps[i](val.get(f))
                 # r[f] = self.deps[i](val[f])
         except BaseException as e:
-            raise ValueError(f'[1] {self.t}, {i}, {f}, {val}: {e}')
+            raise ValueError(f'[1] {self.t}, {i}, {f}, `{val}`: {e}')
 
         try:
 

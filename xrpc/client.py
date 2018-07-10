@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, NamedTuple
 
@@ -13,6 +14,8 @@ from xrpc.util import time_now
 class ClientConfig(NamedTuple):
     timeout_resend: float = 0.033
     timeout_total: Optional[float] = None
+    ignore_horizon: bool = False
+    """If ```HorizonPassedError``` is passed, restart the action"""
 
 
 class ServiceWrapper:
@@ -22,21 +25,18 @@ class ServiceWrapper:
         self.defn = defn
         self.conf = conf
 
-    def __getattr__(self, item, key: Optional[RPCKey] = None):
+    def __getattr__(self, item):
         if item in self.defn.rpcs:
-            if key is None:
-                key = RPCKey.new()
-
-            return CallWrapper(self, item, key)
+            return CallWrapper(self, item)
         else:
             raise AttributeError(item)
 
 
-class CallWrapper:
-    def __init__(self, type: ServiceWrapper, name: str, key: RPCKey):
-        self.type = type
-        self.name = name
-        self.key = key
+@dataclass
+class RequestWrapper:
+    type: ServiceWrapper
+    name: str
+    key: RPCKey = field(default_factory=RPCKey)
 
     def __call__(self, *args, **kwargs):
         c = self.type.defn.rpcs[self.name]
@@ -105,6 +105,21 @@ class CallWrapper:
                 self.type.transport.pop()
         else:
             raise NotImplementedError(c.conf.type)
+
+
+class CallWrapper:
+    def __init__(self, type: ServiceWrapper, name: str):
+        self.type = type
+        self.name = name
+
+    def __call__(self, *args, **kwargs):
+        while True:
+            try:
+                return RequestWrapper(self.type, self.name)(*args, **kwargs)
+            except HorizonPassedError:
+                if self.type.conf.ignore_horizon:
+                    continue
+                raise
 
 
 def build_wrapper(pt: ServiceDefn, transport: RPCTransportStack, dest: Origin, conf: ClientConfig=ClientConfig()):
