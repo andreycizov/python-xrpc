@@ -1,8 +1,10 @@
-from datetime import datetime
-from typing import Any, Dict
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any, Dict, TypeVar, Generic
 
 from xrpc.error import HorizonPassedError
 from xrpc.net import RPCKey
+from xrpc.util import time_now
 
 
 class RPCLogDict:
@@ -37,6 +39,43 @@ class RPCLogDict:
 
         self.horizon = new_horizon
 
+
+K = TypeVar('K')
+V = TypeVar('V')
+
+
+@dataclass
+class CachedDictRecord:
+    ts: datetime
+    v: V
+
+
+class Hidrate(Generic[K, V]):
+    def __call__(self, cd: 'CachedDict', k: K) -> V:
+        raise NotImplementedError()
+
+
+class CachedDict(Generic[K, V]):
+    def __init__(self, hidrate_fn: Hidrate, max_timeout: timedelta = timedelta(seconds=120)):
+        self.values: Dict[K, CachedDictRecord] = {}
+        self.hidrate_fn: Hidrate = hidrate_fn
+        self.max_timeout = max_timeout
+
+    def __setitem__(self, key, value):
+        self.values[key] = CachedDictRecord(time_now(), value)
+
+    def __getitem__(self, item):
+        now = time_now()
+
+        if item in self.values:
+            item_rec = self.values[item]
+
+            if item_rec.ts > now - self.max_timeout:
+                return item_rec.v
+            else:
+                return self.hidrate_fn(self, item)
+
+        return self.hidrate_fn(self, item)
 
 class ObjectDict:
     def __init__(self, **kwargs):

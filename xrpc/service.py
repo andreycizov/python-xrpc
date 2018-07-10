@@ -1,5 +1,5 @@
 import datetime
-from typing import NamedTuple, Any
+from typing import NamedTuple, Any, Optional
 
 from xrpc.const import SERVER_SERDE_INST
 from xrpc.generic import build_generic_context
@@ -22,6 +22,7 @@ class ServiceDefn(NamedTuple):
         rpcs_serde = {}
 
         serde_set: SerdeSet = SerdeSet.walk(SERVER_SERDE_INST, datetime.datetime, ctx)
+        serde_set = serde_set.merge(SerdeSet.walk(SERVER_SERDE_INST, Optional[str], ctx))
 
         for rpc_name, rpc_def in rpcs.items():
             fa = CallableArgsWrapper.from_func_cls(obj, rpc_def.fn, )

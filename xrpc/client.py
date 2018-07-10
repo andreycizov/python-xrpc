@@ -68,7 +68,7 @@ class RequestWrapper:
                 if packet.name == RPCReply.ok.value:
                     ret = self.type.defn.serde.deserialize(o, packet.payload)
                 elif packet.name == RPCReply.fingerprint.value:
-                    raise InvalidFingerprintError()
+                    raise InvalidFingerprintError(self.type.defn.serde.deserialize(Optional[str], packet.payload))
                 elif packet.name == RPCReply.horizon.value:
                     raise HorizonPassedError(self.type.defn.serde.deserialize(datetime, packet.payload))
                 elif packet.name == RPCReply.internal.value:

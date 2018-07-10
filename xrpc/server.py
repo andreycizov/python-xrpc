@@ -158,7 +158,7 @@ def run_server(cls, running_instance, bind_urls: List[str], horizon_each=60.):
                 else:
                     if p.name not in rpcs:
                         logging.error(f'Could not find name %s %s', p.name, set(rpcs.keys()))
-                        raise InvalidFingerprintError()
+                        raise InvalidFingerprintError('name')
 
                     fa, fb = service_defn.rpcs_serde[p.name]
 
@@ -167,7 +167,7 @@ def run_server(cls, running_instance, bind_urls: List[str], horizon_each=60.):
                     except Exception as e:
                         # could not deserialize the payload correctly
                         logging.exception(f'Failed to deserialize packet from {raw_packet.addr}')
-                        raise InvalidFingerprintError()
+                        raise InvalidFingerprintError('args')
 
                     # todo we have deserialized the packet
 
@@ -183,8 +183,9 @@ def run_server(cls, running_instance, bind_urls: List[str], horizon_each=60.):
                         log_dict[p.key] = None
                     elif rpcs[p.name].conf.type == RPCType.Signalling:
                         log_dict[p.key] = None
-            except InvalidFingerprintError:
-                rp = RPCPacket(p.key, RPCPacketType.Rep, RPCReply.fingerprint.value, None)
+            except InvalidFingerprintError as e:
+                rp = RPCPacket(p.key, RPCPacketType.Rep, RPCReply.fingerprint.value,
+                               service_defn.serde.serialize(Optional[str], e.reason))
             except HorizonPassedError as e:
                 rp = RPCPacket(p.key, RPCPacketType.Rep, RPCReply.horizon.value,
                                service_defn.serde.serialize(datetime, e.when))

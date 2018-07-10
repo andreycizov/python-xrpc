@@ -1,5 +1,6 @@
 # possible exceptions caused by the API calls
 from datetime import datetime
+from typing import Optional
 
 from xrpc.util import time_now
 
@@ -54,7 +55,9 @@ class InternalError(FailedError):
 
 class InvalidFingerprintError(FailedError):
     # the call was made to a point that does not support given arguments
-    pass
+    def __init__(self, reason: Optional[str] = None):
+        self.reason = reason
+        super().__init__(reason)
 
 
 class TerminationException(Exception):

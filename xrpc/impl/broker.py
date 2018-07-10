@@ -67,29 +67,11 @@ class BrokerConf(NamedTuple):
         )
 
 
-class JobParams(NamedTuple):
-    payload: bytes
-
-
-class JobReturn(NamedTuple):
-    payload: bytes
-
-
 RequestType = TypeVar('RequestType')
 ResponseType = TypeVar('ResponseType')
 
 WorkerCallable = Callable[[RequestType], ResponseType]
 
-
-def build_worker_serde():
-    a = SerdeSet.walk(SERVER_SERDE_INST, JobReturn)
-    b = SerdeSet.walk(SERVER_SERDE_INST, JobParams)
-
-    s = a.merge(b)
-    return s.struct(SERVER_SERDE_INST)
-
-
-# WorkerSerde = build_worker_serde()
 
 def get_func_types(fn: WorkerCallable) -> Tuple[Type[RequestType], Type[ResponseType]]:
     if not isinstance(fn, types.FunctionType):
@@ -122,8 +104,6 @@ def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, path: str):
         # use the callable's type hints in order to serialize and deserialize parameters
 
         cls_req, cls_res = get_func_types(fn)
-
-        print(cls_req, cls_res)
 
         serde = build_serde(cls_req, cls_res)
 
@@ -166,7 +146,7 @@ class Worker(Generic[RequestType, ResponseType]):
 
         self.conf = conf
         self.broker_addr = broker_addr
-        self.assigned: Optional[JobParams] = None
+        self.assigned: Optional[RequestType] = None
 
         self.dir = None
         self.dir = tempfile.mkdtemp()
@@ -198,7 +178,7 @@ class Worker(Generic[RequestType, ResponseType]):
 
     @rpc(RPCType.Durable)
     def assign(self, pars: RequestType):
-        if self.assigned is not None:
+        if self.assigned is not None and pars != self.assigned:
             raise ValueError('Double assignment')
 
         op = Packet(self.unix_url, json.dumps(self.serde.serialize(self.cls_req, pars)).encode())
@@ -207,6 +187,10 @@ class Worker(Generic[RequestType, ResponseType]):
 
         self.socket.send(op.pack())
         self.assigned = pars
+
+    @rpc(RPCType.Repliable)
+    def pid(self) -> int:
+        return int(self.inst.pid)
 
     @regular()
     def heartbeat(self) -> float:

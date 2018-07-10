@@ -104,7 +104,11 @@ class UDPTransport(Transport):
         assert isinstance(buffer, int), buffer
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # UDP
-        sock.bind((self.url.hostname if self.url.hostname else '0.0.0.0', self.url.port if self.url.port else 0))
+
+        try:
+            sock.bind((self.url.hostname if self.url.hostname else '0.0.0.0', self.url.port if self.url.port else 0))
+        except OSError as e:
+            raise OSError(f'{url}')
         sock.settimeout(0)
 
         self.fd: socket = sock
