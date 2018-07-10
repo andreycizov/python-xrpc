@@ -46,6 +46,7 @@ def popen(fn, *args, **kwargs) -> subprocess.Popen:
         sys.executable,
         '-m',
         __name__,
+        f'{fn.__module__}.{fn.__name__}',
         argv_encode(PopenStruct(
             fn,
             args,
@@ -72,10 +73,15 @@ class PopenStack:
         logging.getLogger(__name__).debug('Exit %s %s %s', exc_type, exc_val, exc_tb)
         if exc_type:
             for x in self.stack:
-                x.terminate()
+                x.kill()
         else:
-            for x in self.stack:
-                x.wait(timeout=self.timeout)
+            try:
+                for x in self.stack:
+                    x.wait(timeout=self.timeout)
+            except subprocess.TimeoutExpired:
+                for x in self.stack:
+                    x.send_signal(signal.SIGKILL)
+                raise
 
 
 def popen_main():
@@ -93,7 +99,7 @@ def popen_main():
             prev_handler = {k: v for k, v in zip(codes, prev_handlers)}
 
             try:
-                defn: PopenStruct = argv_decode(sys.argv[1])
+                defn: PopenStruct = argv_decode(sys.argv[2])
             except:
                 import traceback
                 import pprint

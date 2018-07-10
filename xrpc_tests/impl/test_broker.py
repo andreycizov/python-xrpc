@@ -1,13 +1,13 @@
 import logging
 import os
-import signal
 import unittest
+from _signal import SIGTERM, SIGKILL
 from time import sleep
 
 from dataclasses import dataclass
 
 from xrpc.client import ClientConfig
-from xrpc.dsl import RPCType, rpc, regular
+from xrpc.dsl import RPCType, rpc, regular, signal
 from xrpc.error import TerminationException
 from xrpc.impl.broker import Broker, Worker, BrokerConf, BrokerResult
 from xrpc.logging import logging_setup, LoggerSetup, LL, logging_config
@@ -32,6 +32,10 @@ class ResultsReceiver(BrokerResult[Response]):
     def finished(self, job: Response):
         logging.debug('Finished')
         raise TerminationException('Finished')
+
+    @signal()
+    def exit(self):
+        return True
 
     @regular()
     def reg(self) -> float:
@@ -116,7 +120,7 @@ class TestBroker(unittest.TestCase):
 
             wait_items([c])
 
-            b.send_signal(signal.SIGTERM)
+            b.send_signal(SIGTERM)
 
             with build_ts(Broker[Request, Response], broker_addr) as br:
                 x = 1
@@ -124,7 +128,7 @@ class TestBroker(unittest.TestCase):
                     x, = br.stats()
                     sleep(1)
 
-            a.send_signal(signal.SIGTERM)
+            a.send_signal(SIGTERM)
 
     def test_kill_child(self):
         conf = BrokerConf()
@@ -135,6 +139,7 @@ class TestBroker(unittest.TestCase):
         with build_logging(), PopenStack(timeout=10.) as s:
             a = popen(run_broker, logging_config(), conf, broker_addr, res_addr)
             s.add(a)
+            # todo: add a worker that is killed mid-execution
             b = popen(run_worker, logging_config(), conf, w_addr, broker_addr)
             s.add(b)
             c = popen(run_results, logging_config(), res_addr)
@@ -149,12 +154,13 @@ class TestBroker(unittest.TestCase):
             with build_ts(Worker[Request, Response], w_addr) as w:
 
                 #w: Worker
-                os.kill(w.pid(), signal.SIGKILL)
+                os.kill(w.pid(), SIGKILL)
 
             with build_ts(Broker[Request, Response], broker_addr) as br:
                 x = 1
                 while x > 0:
                     x, = br.stats()
                     sleep(1)
+            c.send_signal(SIGTERM)
+            a.send_signal(SIGTERM)
 
-            a.send_signal(signal.SIGTERM)
