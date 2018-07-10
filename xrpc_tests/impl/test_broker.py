@@ -150,8 +150,6 @@ class TestBroker(unittest.TestCase):
                 w: Worker
                 os.kill(w.pid(), signal.SIGKILL)
 
-            b.send_signal(signal.SIGTERM)
-
             with build_ts(Broker[Request, Response], broker_addr) as br:
                 x = 1
                 while x > 0:
