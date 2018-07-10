@@ -147,7 +147,8 @@ class TestBroker(unittest.TestCase):
                     sleep(1)
 
             with build_ts(Worker[Request, Response], w_addr) as w:
-                w: Worker
+
+                #w: Worker
                 os.kill(w.pid(), signal.SIGKILL)
 
             with build_ts(Broker[Request, Response], broker_addr) as br:

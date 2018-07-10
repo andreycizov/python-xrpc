@@ -197,6 +197,7 @@ class Worker(Generic[RequestType, ResponseType]):
         try:
             self.inst.wait(0)
             self.exit()
+            logging.getLogger(__name__).warning('Worker process had been killed')
             raise TerminationException()
         except TimeoutExpired:
             pass

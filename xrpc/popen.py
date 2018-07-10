@@ -41,7 +41,7 @@ class PopenStruct(NamedTuple):
     kwargs: Dict[str, Any]
 
 
-def popen(fn, *args, **kwargs):
+def popen(fn, *args, **kwargs) -> subprocess.Popen:
     args = [
         sys.executable,
         '-m',

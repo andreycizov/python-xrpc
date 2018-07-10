@@ -39,7 +39,7 @@ def build_ts(rpc: Type[T], addr='udp://127.0.0.1:7483', conf=ClientConfig(timeou
     with t:
         ts = RPCTransportStack([t])
         pt = ServiceDefn.from_obj(rpc)
-        r: rpc = build_wrapper(pt, ts, addr, conf=conf)
+        r: T = build_wrapper(pt, ts, addr, conf=conf)
 
         yield r
 
