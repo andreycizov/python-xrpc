@@ -95,11 +95,12 @@ class TestBroker(unittest.TestCase):
         conf = BrokerConf()
         broker_addr = 'udp://127.0.0.1:7483'
         res_addr = 'udp://127.0.0.1:7485'
+        w_addr = 'udp://127.0.0.1'
 
         with build_logging(), PopenStack(timeout=10.) as s:
             a = popen(run_broker, logging_config(), conf, broker_addr, res_addr)
             s.add(a)
-            b = popen(run_worker, logging_config(), conf, broker_addr)
+            b = popen(run_worker, logging_config(), conf, w_addr, broker_addr)
             s.add(b)
             c = popen(run_results, logging_config(), res_addr)
             s.add(c)
