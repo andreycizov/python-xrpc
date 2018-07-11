@@ -16,7 +16,7 @@ setup(
     author='Andrey Cizov',
     author_email='acizov@gmail.com',
     packages=find_packages(include=('xrpc', 'xrpc.*',)),
-    description='Python 3 type hinted protobuf binding generator',
+    description='Python 3 RPC framework',
     keywords='',
     url='https://github.com/andreycizov/python-xrpc',
     include_package_data=True,
