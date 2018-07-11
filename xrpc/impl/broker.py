@@ -75,13 +75,12 @@ WorkerCallable = Callable[[RequestType], ResponseType]
 
 def get_func_types(fn: WorkerCallable) -> Tuple[Type[RequestType], Type[ResponseType]]:
     if not isinstance(fn, types.FunctionType):
-        print(fn)
         fn = fn.__call__
 
     spec = getfullargspec(fn)
     is_method = ismethod(fn)
     annot = build_types(spec, is_method, allow_missing=True)
-    arg_name, _ = next(pair_spec(spec, is_method, None))
+    arg_name, _, _, _ = next(pair_spec(spec, is_method, None))
 
     return annot[arg_name], annot[ARGS_RET]
 

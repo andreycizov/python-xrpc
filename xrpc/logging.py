@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from typing import NamedTuple, List, Union, Optional, Dict, Callable, TypeVar, Tuple
 from urllib.parse import urlparse, ParseResult, parse_qs
 
+from dataclasses import dataclass
 from pygelf import GelfUdpHandler
 
 
@@ -258,6 +259,21 @@ def logging_setup(conf: LoggerSetup, root: Optional[logging.Logger] = None):
                 root.removeHandler(handler)
     finally:
         logging.getLogger().setLevel(a.level)
+
+
+@dataclass
+class logging_spec:
+    setup: LoggerSetup
+
+    def __call__(self, fn):
+        from functools import wraps
+
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            with logging_setup(self.setup) as x:
+                return fn(*args, **kwargs)
+
+        return wrapped
 
 
 T = TypeVar('T')

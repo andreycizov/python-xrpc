@@ -131,7 +131,7 @@ class TestBroker(unittest.TestCase):
             a.send_signal(SIGTERM)
 
     def test_kill_child(self):
-        conf = BrokerConf()
+        conf = BrokerConf(heartbeat=0.5, max_pings=10)
         broker_addr = 'udp://127.0.0.1:54546'
         res_addr = 'udp://127.0.0.1:54547'
         w_addr = 'udp://127.0.0.1:54548'

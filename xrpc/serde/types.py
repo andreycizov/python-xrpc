@@ -22,7 +22,7 @@ if sys.version_info >= (3, 7):
 else:
     from typing import Any, _ForwardRef, _FinalTypingBase, Optional, Union, List, Dict, _tp_cache, _type_check, \
         Callable, \
-        NamedTuple, Tuple, TypeVar
+        NamedTuple, Tuple, TypeVar, Iterable
 from dataclasses import is_dataclass, fields
 
 from xrpc.util import time_parse
@@ -716,12 +716,37 @@ def build_types(spec: FullArgSpec, is_method=False, allow_missing=False):
     return map
 
 
-def pair_spec(spec: FullArgSpec, is_method, *args, **kwargs) -> Tuple[Tuple[Any], Dict[str, Any]]:
+EMPTY_DEFAULT = object()
+
+
+class ArgumentsException(Exception):
+    def __init__(
+            self,
+            is_pos=False,
+            is_pos_many=False,
+            name_missing: Optional[List[str]] = None,
+            argument_required: Optional[List[str]] = None,
+    ):
+        self.is_pos = is_pos
+        self.is_pos_many = is_pos_many
+        self.name_missing = name_missing
+        self.argument_required = argument_required
+        super().__init__(is_pos, name_missing, argument_required)
+
+    def __str__(self) -> str:
+        return f'{self.__class__.__name__}({self.is_pos}, {self.is_pos_many}, {self.name_missing}, {self.argument_required})'
+
+
+def pair_spec(spec: FullArgSpec, is_method, *args, **kwargs) -> Iterable[Tuple[str, Any, Optional[Any]]]:
     # pair function arguments to their names
 
     # we need to "eat" the arguments correctly (and then map them to something else).
     map_args = list(spec.args)
+    map_args_defaults = list(spec.defaults or [])
+    map_args_defaults = [EMPTY_DEFAULT] * (len(map_args) - len(map_args_defaults)) + map_args_defaults
+
     kwonlyargs = list(spec.kwonlyargs) if spec.kwonlyargs else []
+    kwonlydefaults = spec.kwonlydefaults or {}
 
     mapped_args = list()
 
@@ -731,40 +756,73 @@ def pair_spec(spec: FullArgSpec, is_method, *args, **kwargs) -> Tuple[Tuple[Any]
 
     vararg_ctr = 0
 
+    names_missing = []
+
     for arg in args:
         if len(map_args):
             curr_arg, map_args = map_args[0], map_args[1:]
+            curr_default_arg, map_args_defaults = map_args_defaults[0], map_args_defaults[1:]
 
-            yield curr_arg, None
+            yield curr_arg, None, arg, curr_default_arg
 
             mapped_args.append(curr_arg)
         elif spec.varargs:
-            yield ARGS_VAR, vararg_ctr
+            yield ARGS_VAR, vararg_ctr, arg, None
             vararg_ctr += 1
 
         else:
-            raise ValueError(f'Could not find mapping for argument `{arg}`')
+            raise ArgumentsException(is_pos=True, is_pos_many=True, name_missing=[arg])
+
+    matched_kwds = []
 
     for kwarg_name, kwarg_val in kwargs.items():
         has_matched = False
+        default_value = EMPTY_DEFAULT
 
         if kwarg_name in map_args:
-            map_args.remove(kwarg_name)
+            map_args_idx = map_args.index(kwarg_name)
+
             has_matched = True
+            default_value = map_args_defaults[map_args_idx]
+
+            map_args = map_args[:map_args_idx] + map_args[map_args_idx + 1:]
+            map_args_defaults = map_args_defaults[:map_args_idx] + map_args_defaults[map_args_idx + 1:]
+
         elif kwarg_name in kwonlyargs:
             kwonlyargs.remove(kwarg_name)
             has_matched = True
+            default_value = kwonlydefaults.get(kwarg_name, EMPTY_DEFAULT)
 
         if not has_matched:
             if spec.varkw:
                 assert kwarg_name not in mapped_args, kwarg_name
-                yield ARGS_KW, kwarg_name
+                yield ARGS_KW, kwarg_name, kwarg_val, None
             else:
-                raise ValueError(f'Function does not accept `{kwarg_name}`')
+                names_missing.append(kwarg_name)
+                continue
         else:
-            yield kwarg_name, None
+            yield kwarg_name, None, kwarg_val, default_value
 
-    assert len(map_args) == 0, map_args
+        matched_kwds.append(kwarg_name)
+
+    reqd = []
+    is_pos = True
+
+    for v in kwonlyargs:
+        if v in kwonlydefaults:
+            is_pos = False
+            yield ARGS_KW, v, EMPTY_DEFAULT, kwonlydefaults[v]
+        else:
+            reqd.append(v)
+
+    for x, y in zip(map_args, map_args_defaults):
+        if y is EMPTY_DEFAULT:
+            reqd.append(y)
+        else:
+            yield ARGS_KW, x, EMPTY_DEFAULT, y
+
+    if len(reqd):
+        raise ArgumentsException(is_pos=is_pos, argument_required=reqd)
 
     # return r_args, r_kwargs
 
