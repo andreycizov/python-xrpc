@@ -4,11 +4,10 @@ import inspect
 import sys
 import uuid
 from enum import Enum
-from functools import partial
 from inspect import FullArgSpec
-from types import ModuleType
 
 from xrpc.generic import build_generic_context as _build_generic_context
+from xrpc.serde.error import SerdeException
 
 
 def build_generic_context(*args):
@@ -17,13 +16,12 @@ def build_generic_context(*args):
 
 
 if sys.version_info >= (3, 7):
-    from typing import Any, ForwardRef, Optional, Union, List, Dict, _tp_cache, _type_check, Callable, \
-        NamedTuple, Tuple, TypeVar, _SpecialForm, Iterable
+    from typing import Any, ForwardRef, Optional, Union, List, Dict, Callable, \
+    NamedTuple, Tuple, TypeVar, Iterable
 else:
-    from typing import Any, _ForwardRef, _FinalTypingBase, Optional, Union, List, Dict, _tp_cache, _type_check, \
-        Callable, \
+    from typing import Any, _ForwardRef, Optional, Union, List, Dict, Callable, \
         NamedTuple, Tuple, TypeVar, Iterable
-from dataclasses import is_dataclass, fields
+from dataclasses import is_dataclass, fields, dataclass
 
 from xrpc.util import time_parse
 from xrpc.serde.abstract import SerdeType, SerdeInst, SerdeNode, DESER, SER, SerdeTypeDeserializer, SerdeTypeSerializer, \
@@ -51,157 +49,167 @@ class ForwardRefSerde(SerdeType):
         return i.step(i.norm(t, ctx), ctx)
 
 
-#
-#
-# class _Joint(_SpecialForm, _root=True):
-#     """Joint type.
-#     Joint[X] is equivalent to Union[X, _Joint.Tag].
-#     """
-#
-#     __slots__ = ()
-#
-#     class Tag:
-#         pass
-#
-#     @_tp_cache
-#     def __getitem__(self, arg):
-#         arg = _type_check(arg, "Joint[t] requires a single type.")
-#         return Union[arg, self.Tag]
-
-
-# Joint = _SpecialForm('Joint', doc='Joined attribs')
-
 class UnionNext(Exception):
     pass
 
 
 class UnionDeserializer(SerdeTypeDeserializer):
-    def __init__(self, parent: 'SerdeType', t: Any, deps: List[DESER]):
+    def __init__(self, parent: 'UnionSerde', t: Any, deps: List[DESER]):
         super().__init__(parent, t, deps)
 
         assert hasattr(t, '__args__')
 
-        sub_args = t.__args__
-
-        stack = []
-
-        while True:
-            if sub_args[-1] == type(None):
-                vt, *_ = sub_args
-
-                stack.append('deser_none')
-                sub_args = sub_args[:-1]
-            elif len(sub_args) == 1:
-                vt, *_ = sub_args
-
-                stack.append('deser_value')
-                break
-            else:
-                assert False, ('possibly a union type', t, t.__args__, deps)
-
-        self.stack = stack
-
-    def deser_none(self, val):
-        if val is None:
-            return None
-        else:
-            raise UnionNext()
-
-    def deser_value(self, val):
-        return self.deps[0](val)
+        self.ordered = {k: i for i, (k, v) in enumerate(parent.extract_ordered(t))}
 
     def __call__(self, val: Union[list, dict]) -> Any:
-        for item in self.stack:
-            try:
-                return getattr(self, item)(val)
-            except UnionNext:
-                pass
+        idx, val = val
+
+        dep_idx = self.ordered.get(idx)
+
+        if dep_idx is None:
+            raise SerdeException(val, 'u_idx', idx)
+
+        dep = self.deps[dep_idx]
+
+        try:
+            return dep(val)
+        except Exception as e:
+            raise SerdeException(val, 'u_deps', idx=dep_idx, par=e)
+
+
+class UnionSerializer(UnionDeserializer):
+    def __call__(self, val):
+        desc = None
+
+        desc = self.parent.descriptor_fn(True, val)
+        nv = desc, val
+        try:
+            return desc, super().__call__(nv)
+        except Exception as e:
+            raise SerdeException(val, 'union_ser', desc=desc, par=e)
+
+
+def descriptor_classname(is_inst, t):
+    if not is_inst:
+        return t.__name__
+    else:
+        return t.__class__.__name__
 
 
 class UnionSerde(SerdeType):
     cls_deserializer = UnionDeserializer
-    cls_serializer = UnionDeserializer
+    cls_serializer = UnionSerializer
+
+    def __init__(self, descriptor_fn=None):
+        if descriptor_fn is None:
+            descriptor_fn = descriptor_classname
+        self.descriptor_fn = descriptor_fn
+        super().__init__()
 
     def match(self, t: Any) -> bool:
         if sys.version_info >= (3, 7):
-            return getattr(t, '__origin__', None) is Union
+            r = getattr(t, '__origin__', None) is Union
         else:
-            return t.__class__.__name__ == '_Union'
+            r = t.__class__.__name__ == '_Union'
 
-    def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> Any:
-        if t.__args__[-1] == type(None):
-            *vt, _ = t.__args__
-            return Optional[i.norm(Union[tuple(i.norm(vtt, ctx) for vtt in vt)], ctx)]
-        elif t.__args__[-1] == _Joint.Tag:
-            *vt, _ = t.__args__
-            return Joint[i.norm(Union[tuple(i.norm(vtt, ctx) for vtt in vt)], ctx)]
-        else:
-            st = [i.norm(x, ctx) for x in t.__args__]
-            return Union[st]
+        if r:
+            sub_args = t.__args__
 
-    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
-        assert hasattr(t, '__args__')
-
-        # todo build all of the dependencies that would later on be used in the deserializer
-
-        sub_args = t.__args__
-
-        if sub_args[-1] == type(None):
-            *vt, _ = t.__args__
-            vt = tuple(vt)
-
-            if len(vt) == 1:
-                vt = i.norm(vt[0], ctx)
-
-                return SerdeNode(t, [vt])
-            else:
-                vt = i.norm(Union[vt], ctx)
-                r = i.step(vt, ctx)
-                return SerdeNode(t, r.deps)
-        elif sub_args[-1] == _Joint.Tag:
-            *vt, _ = t.__args__
-            vt = tuple(vt)
-            if len(vt) == 1:
-                vt = i.norm(vt[0], ctx)
-
-                fields = [z for i, (f, z) in enumerate(vt._field_types.items())]
-
-                rtn_deps = [i.norm(z, ctx) for z in fields]
-
-                return SerdeNode(t, rtn_deps)
-            else:
-                assert False
-        elif len(sub_args) == 1:
-            assert False, [2]
-        else:
-            assert False, [1]
-
-        rtn_deps = []
-
-        while True:
+            print('a', t, len(sub_args), sub_args)
 
             if sub_args[-1] == type(None):
-                *vt, _ = t.__args__
-                vt = tuple(vt)
-                vt = i.norm(vt, mod)
-                rtn_deps = [vt]
-            elif sub_args[-1] == _Joint.Tag:
-                *vt, _ = t.__args__
-                vt = tuple(vt)
-                vt = i.norm(Union[vt], mod)
-
-                fields = [z for i, (f, z) in enumerate(vt._field_types.items())]
-
-                rtn_deps = [i.norm(z, mod) for z in fields]
-
-                return SerdeNode(t, rtn_deps)
+                return False
             elif len(sub_args) == 1:
-                pass
-                break
+                return False
             else:
-                assert False
+                return True
+        else:
+            return False
 
-        return SerdeNode(t, rtn_deps)
+    def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> Any:
+        st = tuple(i.norm(x, ctx) for x in t.__args__)
+        return Union[st]
+
+    def extract_ordered(self, t: Any):
+        vt = t.__args__
+
+        ordered = [(self.descriptor_fn(False, x), i) for i, x in enumerate(vt)]
+        ordered = sorted(ordered)
+        seen = set()
+
+        for n, idx in ordered:
+            if n in seen:
+                assert False, (n, 'Could not unionize types with the same name')
+            seen.add(n)
+
+        return tuple((n, vt[idx]) for n, idx in ordered)
+
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        ordered = self.extract_ordered(Union[tuple(i.norm(x, ctx) for x in t.__args__)])
+
+        return SerdeNode(Union[tuple(x for _, x in ordered)], [t for _, t in ordered], ctx)
+
+
+class OptionalDeserializer(SerdeTypeDeserializer):
+    def __call__(self, val: Union[list, dict]) -> Any:
+        fn = self.deps[0]
+        try:
+            if val is None:
+                return None
+            else:
+                return fn(val)
+        except Exception as e:
+            raise SerdeException(val, 'opt', fn=fn, par=e)
+
+
+class OptionalSerde(SerdeType):
+    cls_deserializer = OptionalDeserializer
+    cls_serializer = OptionalDeserializer
+
+    def match(self, t: Any) -> bool:
+        if sys.version_info >= (3, 7):
+            r = getattr(t, '__origin__', None) is Union
+        else:
+            r = t.__class__.__name__ == '_Union'
+
+        if r:
+            sub_args = t.__args__
+
+            print('b', t, len(sub_args), sub_args)
+
+            if sub_args[-1] == type(None) and len(sub_args) == 2:
+                return True
+            elif len(sub_args) == 1:
+                return False
+            else:
+                return sub_args[-1] == type(None)
+        else:
+            return False
+
+    def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> Any:
+        *args, _ = t.__args__
+        args = tuple(i.norm(x, ctx) for x in args)
+
+        if len(args) > 1:
+            return Optional[Union[args]]
+        else:
+            return Optional[args[0]]
+
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        *args, _ = t.__args__
+
+        args = tuple(i.norm(x, ctx) for x in args)
+
+        deps = []
+
+        if len(args) > 1:
+            deps = [Union[args]]
+        else:
+            deps = [args[0]]
+
+        print(t, args, deps)
+
+        return SerdeNode(self.norm(i, t, ctx), deps, ctx)
 
 
 class AtomDeserializer(SerdeTypeSerializer):
@@ -210,7 +218,10 @@ class AtomDeserializer(SerdeTypeSerializer):
         self.mapper, *_ = [x for x in self.parent.ATOMS if t == x]
 
     def __call__(self, val: Any) -> Union[list, dict]:
-        return self.mapper(val)
+        try:
+            return self.mapper(val)
+        except Exception as e:
+            raise SerdeException(val, 'a_dv', t=self.mapper.__name__, par=e)
 
 
 class AtomSerializer(SerdeTypeSerializer):
@@ -220,7 +231,7 @@ class AtomSerializer(SerdeTypeSerializer):
 
     def __call__(self, val: Any) -> Union[list, dict]:
         if not isinstance(val, self.mapper):
-            raise ValueError(f'{val} {self.mapper}')
+            raise SerdeException(val, 'a_sv', t=self.mapper.__name__)
 
         return val
 
@@ -469,14 +480,14 @@ class NamedTupleDeserializer(SerdeTypeDeserializer):
                 # either way (even if a field is non-optional), that field must not accept None as it's argument
                 r[f] = self.deps[i](val.get(f))
                 # r[f] = self.deps[i](val[f])
-        except BaseException as e:
-            raise ValueError(f'[1] {self.t}, {i}, {f}, `{val}`: {e}')
+        except Exception as e:
+            raise SerdeException(val, 'u_sf', idx=i, field=f, par=e)
 
         try:
 
             return self.t(**r)
-        except BaseException as e:
-            raise ValueError(f'[2] {self.t}, {i}, {f}, {val}: {e}')
+        except Exception as e:
+            raise SerdeException(val, 'u_inst', fields=r, par=e)
 
 
 class NamedTupleSerializer(SerdeTypeSerializer):
@@ -737,94 +748,111 @@ class ArgumentsException(Exception):
         return f'{self.__class__.__name__}({self.is_pos}, {self.is_pos_many}, {self.name_missing}, {self.argument_required})'
 
 
-def pair_spec(spec: FullArgSpec, is_method, *args, **kwargs) -> Iterable[Tuple[str, Any, Optional[Any]]]:
-    # pair function arguments to their names
+@dataclass
+class PairSpecValue:
+    name: str
+    name_idx: Optional[Union[str, int]]
+    arg: Any
+    """Given argument to the function"""
+    default_arg: Any
 
-    # we need to "eat" the arguments correctly (and then map them to something else).
-    map_args = list(spec.args)
-    map_args_defaults = list(spec.defaults or [])
-    map_args_defaults = [EMPTY_DEFAULT] * (len(map_args) - len(map_args_defaults)) + map_args_defaults
+@dataclass
+class PairSpec:
+    spec: FullArgSpec
+    is_method: bool
 
-    kwonlyargs = list(spec.kwonlyargs) if spec.kwonlyargs else []
-    kwonlydefaults = spec.kwonlydefaults or {}
+    def __call__(self, *args, **kwargs) -> Iterable[PairSpecValue]:
+        spec = self.spec
+        is_method = self.is_method
+        # pair function arguments to their names
 
-    mapped_args = list()
+        # we need to "eat" the arguments correctly (and then map them to something else).
+        map_args = list(spec.args)
+        map_args_defaults = list(spec.defaults or [])
+        map_args_defaults = [EMPTY_DEFAULT] * (len(map_args) - len(map_args_defaults)) + map_args_defaults
 
-    if is_method:
-        assert map_args[0] == 'self'
-        map_args = map_args[1:]
+        kwonlyargs = list(spec.kwonlyargs) if spec.kwonlyargs else []
+        kwonlydefaults = spec.kwonlydefaults or {}
 
-    vararg_ctr = 0
+        mapped_args = list()
 
-    names_missing = []
+        if is_method:
+            assert map_args[0] == 'self'
+            map_args = map_args[1:]
 
-    for arg in args:
-        if len(map_args):
-            curr_arg, map_args = map_args[0], map_args[1:]
-            curr_default_arg, map_args_defaults = map_args_defaults[0], map_args_defaults[1:]
+        vararg_ctr = 0
 
-            yield curr_arg, None, arg, curr_default_arg
+        names_missing = []
 
-            mapped_args.append(curr_arg)
-        elif spec.varargs:
-            yield ARGS_VAR, vararg_ctr, arg, None
-            vararg_ctr += 1
+        for arg in args:
+            if len(map_args):
+                curr_arg, map_args = map_args[0], map_args[1:]
+                curr_default_arg, map_args_defaults = map_args_defaults[0], map_args_defaults[1:]
 
-        else:
-            raise ArgumentsException(is_pos=True, is_pos_many=True, name_missing=[arg])
+                yield PairSpecValue(curr_arg, None, arg, curr_default_arg)
 
-    matched_kwds = []
+                mapped_args.append(curr_arg)
+            elif spec.varargs:
+                yield PairSpecValue(ARGS_VAR, vararg_ctr, arg, None)
+                vararg_ctr += 1
 
-    for kwarg_name, kwarg_val in kwargs.items():
-        has_matched = False
-        default_value = EMPTY_DEFAULT
-
-        if kwarg_name in map_args:
-            map_args_idx = map_args.index(kwarg_name)
-
-            has_matched = True
-            default_value = map_args_defaults[map_args_idx]
-
-            map_args = map_args[:map_args_idx] + map_args[map_args_idx + 1:]
-            map_args_defaults = map_args_defaults[:map_args_idx] + map_args_defaults[map_args_idx + 1:]
-
-        elif kwarg_name in kwonlyargs:
-            kwonlyargs.remove(kwarg_name)
-            has_matched = True
-            default_value = kwonlydefaults.get(kwarg_name, EMPTY_DEFAULT)
-
-        if not has_matched:
-            if spec.varkw:
-                assert kwarg_name not in mapped_args, kwarg_name
-                yield ARGS_KW, kwarg_name, kwarg_val, None
             else:
-                names_missing.append(kwarg_name)
-                continue
-        else:
-            yield kwarg_name, None, kwarg_val, default_value
+                raise ArgumentsException(is_pos=True, is_pos_many=True, name_missing=[arg])
 
-        matched_kwds.append(kwarg_name)
+        matched_kwds = []
 
-    reqd = []
-    is_pos = True
+        for kwarg_name, kwarg_val in kwargs.items():
+            has_matched = False
+            default_value = EMPTY_DEFAULT
 
-    for v in kwonlyargs:
-        if v in kwonlydefaults:
-            is_pos = False
-            yield ARGS_KW, v, EMPTY_DEFAULT, kwonlydefaults[v]
-        else:
-            reqd.append(v)
+            if kwarg_name in map_args:
+                map_args_idx = map_args.index(kwarg_name)
 
-    for x, y in zip(map_args, map_args_defaults):
-        if y is EMPTY_DEFAULT:
-            reqd.append(y)
-        else:
-            yield ARGS_KW, x, EMPTY_DEFAULT, y
+                has_matched = True
+                default_value = map_args_defaults[map_args_idx]
 
-    if len(reqd):
-        raise ArgumentsException(is_pos=is_pos, argument_required=reqd)
+                map_args = map_args[:map_args_idx] + map_args[map_args_idx + 1:]
+                map_args_defaults = map_args_defaults[:map_args_idx] + map_args_defaults[map_args_idx + 1:]
 
-    # return r_args, r_kwargs
+            elif kwarg_name in kwonlyargs:
+                kwonlyargs.remove(kwarg_name)
+                has_matched = True
+                default_value = kwonlydefaults.get(kwarg_name, EMPTY_DEFAULT)
+
+            if not has_matched:
+                if spec.varkw:
+                    assert kwarg_name not in mapped_args, kwarg_name
+                    yield PairSpecValue(ARGS_KW, kwarg_name, kwarg_val, None)
+                else:
+                    names_missing.append(kwarg_name)
+                    continue
+            else:
+                yield PairSpecValue(kwarg_name, None, kwarg_val, default_value)
+
+            matched_kwds.append(kwarg_name)
+
+        reqd = []
+        is_pos = True
+
+        for v in kwonlyargs:
+            if v in kwonlydefaults:
+                is_pos = False
+                yield PairSpecValue(ARGS_KW, v, EMPTY_DEFAULT, kwonlydefaults[v])
+            else:
+                reqd.append(v)
+
+        for x, y in zip(map_args, map_args_defaults):
+            if y is EMPTY_DEFAULT:
+                reqd.append(y)
+            else:
+                yield ARGS_KW, x, EMPTY_DEFAULT, y
+
+        if len(reqd):
+            raise ArgumentsException(is_pos=is_pos, argument_required=reqd)
+
+
+def pair_spec(spec: FullArgSpec, is_method, *args, **kwargs):
+    return PairSpec(spec, is_method)(*args, **kwargs)
 
 
 ARGS_VAR = '$var'
@@ -998,12 +1026,22 @@ class CallableRetSerde(SerdeType):
 
     def deserializer(self, t: CallableArgsWrapper, deps: List[DESER]) -> DESER:
         def callable_ret_deser(val):
-            return deps[0](val)
+            dep = deps[0]
+
+            try:
+                return dep(val)
+            except Exception as e:
+                raise SerdeException(val=val, code='ex', par=e)
 
         return callable_ret_deser
 
     def serializer(self, t: CallableArgsWrapper, deps: List[SER]) -> SER:
         def callable_ret_ser(val):
-            return deps[0](val)
+            dep = deps[0]
+
+            try:
+                return dep(val)
+            except Exception as e:
+                raise SerdeException(val=val, code='ex', par=e)
 
         return callable_ret_ser

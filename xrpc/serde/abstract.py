@@ -1,6 +1,9 @@
+import logging
 import sys
 from collections import deque
 from types import ModuleType
+
+from xrpc.serde.error import SerdeException
 
 if sys.version_info >= (3, 7):
     from typing import NamedTuple, Any, List, ForwardRef, _type_check, Optional, Union, Dict, Callable, \
@@ -41,6 +44,7 @@ class SerdeInst:
         for x in self.context:
             try:
                 if x.match(t):
+                    logging.getLogger(__name__ + '.match').debug('%s -> %s', t, x)
                     return x
             except:
                 raise ValueError(f'GivenClass={t.__class__} GivenType={t} Matcher={x}')
@@ -61,6 +65,12 @@ class SerdeInst:
 
 
 class SerdeTypeDeserializer:
+    def __str__(self) -> str:
+        return f'{self.__class__.__name__}({self.parent}, {str(self.t)}, {[x.__class__.__name__ for x in self.deps]})'
+
+    def __repr__(self) -> str:
+        return str(self)
+
     def __init__(self, parent: 'SerdeType', t: Any, deps: List[DESER]):
         self.parent = parent
         self.t = t
@@ -71,6 +81,10 @@ class SerdeTypeDeserializer:
 
 
 class SerdeTypeSerializer:
+
+    def __str__(self) -> str:
+        return SerdeTypeDeserializer.__str__(self)
+
     def __init__(self, parent: 'SerdeType', t: Any, deps: List[SER]):
         self.parent = parent
         self.t = t
@@ -115,10 +129,16 @@ class SerdeStruct(NamedTuple):
     serializers: Dict[Any, SER]
 
     def deserialize(self, t: Type[T], val) -> T:
-        return self.deserializers[t](val)
+        try:
+            return self.deserializers[t](val)
+        except Exception as e:
+            raise SerdeException(val, '$', t=t, par=e)
 
     def serialize(self, t, val):
-        return self.serializers[t](val)
+        try:
+            return self.serializers[t](val)
+        except Exception as e:
+            raise SerdeException(val, '$', t=t, par=e)
 
 
 @dataclass
@@ -194,7 +214,7 @@ class SerdeSet:
                     seen.add(dep)
                     to_visit.append((dep, x.ctx))
 
-        seen: Set[Any] = {t,}
+        seen: Set[Any] = {t, }
         r: Dict[Any, SerdeNode] = {}
 
         to_visit: Deque[Tuple[t, SerdeStepContext]] = deque()

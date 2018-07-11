@@ -17,12 +17,6 @@ def mutably_defs_unmatched_kwonlyarg(*, d, **kwargs: int):
     pass
 
 
-def iter_test(iter_obj, nargs):
-    for x in iter_obj:
-        if len(x) != nargs:
-            iter_obj.throw(ValueError(''))
-        yield x
-
 
 class TestPairSpec(unittest.TestCase):
     def test_pair_spec(self):
@@ -31,10 +25,9 @@ class TestPairSpec(unittest.TestCase):
 
         print(tps)
 
-        for x, y, z, w in iter_test(pair_spec(spec, False, 'a', 'b', c='c', d='', arg=0), 4):
-            print(x, y, z)
-
-            if x == 'c':
+        for x in pair_spec(spec, False, 'a', 'b', c='c', d='', arg=0):
+            print(x)
+            if x.name == 'c':
                 self.assertEqual(tps['c'], int)
 
     def test_pair_spec2(self):
@@ -43,8 +36,8 @@ class TestPairSpec(unittest.TestCase):
 
         print(tps)
 
-        for x, y, z, w in iter_test(pair_spec(spec, False, 'a', 'b', 1, 2, 3, 4, 5, arg=0), 4):
-            print(x, y, z, w)
+        for x in pair_spec(spec, False, 'a', 'b', 1, 2, 3, 4, 5, arg=0):
+            print(x)
 
             if x == 'c':
                 self.assertEqual(tps['c'], int)
@@ -55,25 +48,25 @@ class TestPairSpec(unittest.TestCase):
 
         print(tps)
 
-        for x, y, z, w in iter_test(pair_spec(spec, False, 'a', 'b', 1, 2, 3, 4, 5), 4):
-            print(x, y, z, w)
+        for x in pair_spec(spec, False, 'a', 'b', 1, 2, 3, 4, 5):
+            print(x)
 
-            if x == 'c':
+            if x.name == 'c':
                 self.assertEqual(tps['c'], int)
 
     def test_pair_spec_unmatched_kwonlyarg(self):
         spec = getfullargspec(mutably_defs_unmatched_kwonlyarg)
         tps = build_types(spec, False, allow_missing=True)
 
-        for x, y, z, w in pair_spec(spec, False, d=9):
-            print(x, y, z, w)
+        for x in pair_spec(spec, False, d=9):
+            print(x)
 
-            if x == 'c':
+            if x.name == 'c':
                 self.assertEqual(tps['c'], int)
 
         try:
-            for x, y, z, w in iter_test(pair_spec(spec, False), 4):
-                print(x, y, z, w)
+            for x in pair_spec(spec, False):
+                print(x)
 
                 if x == 'c':
                     self.assertEqual(tps['c'], int)

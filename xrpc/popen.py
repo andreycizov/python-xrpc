@@ -59,6 +59,8 @@ def popen(fn, *args, **kwargs) -> subprocess.Popen:
 
 
 class PopenStack:
+    """This is mainly for GC purposes. We wait instead of SIGKILL immediately."""
+
     def __init__(self, timeout=None):
         self.stack: List[subprocess.Popen] = []
         self.timeout = timeout
@@ -81,7 +83,7 @@ class PopenStack:
             except subprocess.TimeoutExpired:
                 for x in self.stack:
                     x.send_signal(signal.SIGKILL)
-                raise
+                raise ValueError('Killed all of them!')
 
 
 def popen_main():

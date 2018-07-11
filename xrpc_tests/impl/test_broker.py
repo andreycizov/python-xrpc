@@ -2,14 +2,16 @@ import logging
 import os
 import unittest
 from _signal import SIGTERM, SIGKILL
+from collections import defaultdict, deque
 from time import sleep
+from typing import Dict
 
 from dataclasses import dataclass
 
 from xrpc.client import ClientConfig
 from xrpc.dsl import RPCType, rpc, regular, signal
 from xrpc.error import TerminationException
-from xrpc.impl.broker import Broker, Worker, BrokerConf, BrokerResult
+from xrpc.impl.broker import Broker, Worker, BrokerConf, BrokerResult, MetricCollector, NodeMetric, WorkerMetric
 from xrpc.logging import logging_setup, LoggerSetup, LL, logging_config
 from xrpc.popen import popen, PopenStack, cov
 from xrpc.server import run_server
@@ -43,14 +45,40 @@ class ResultsReceiver(BrokerResult[Response]):
         return 1.
 
 
-def run_broker(lc, conf, broker_addr, res_addr):
+class MetricReceiver(MetricCollector):
+    def __init__(self) -> None:
+        self.metrics_by_type = defaultdict(list)
+
+    @rpc(RPCType.Signalling)
+    def metrics(self, metric: NodeMetric):
+        ms = self.metrics_by_type[metric.__class__]
+
+        ms.append(metric)
+
+        if len(ms) > 5:
+            ms = ms[-5:]
+        self.metrics_by_type[metric.__class__] = ms
+
+    @signal()
+    def exit(self):
+        return True
+
+    @rpc()
+    def metric_counts(self) -> Dict[str, int]:
+        r = {k.__name__: len([x for x in v if not isinstance(x, WorkerMetric) or x.running_since is not None]) for
+             k, v in self.metrics_by_type.items()}
+        return {k: v for k, v in r.items() if v > 0}
+
+
+def run_broker(lc, conf, broker_addr, res_addr=None, url_metrics=None):
     with logging_setup(lc), cov():
         try:
             rpc = Broker[Request, Response](
                 Request,
                 Response,
                 conf,
-                res_addr
+                res_addr,
+                url_metrics,
             )
             run_server(Broker[Request, Response], rpc, [broker_addr])
         except KeyboardInterrupt:
@@ -64,10 +92,17 @@ def worker_function(req: Request) -> Response:
     return Response(req.val + 1)
 
 
-def run_worker(lc, conf, addr, broker_addr,):
+def worker_function_sleeper(req: Request) -> Response:
+    sleep(3)
+    return Response(req.val + 99)
+
+
+def run_worker(lc, conf, addr, broker_addr, url_metrics=None, worker_fun=None):
     with logging_setup(lc), cov():
         try:
-            rpc = Worker(Request, Response, conf, broker_addr, worker_function)
+            if worker_fun is None:
+                worker_fun = worker_function
+            rpc = Worker(Request, Response, conf, broker_addr, worker_fun, url_metrics)
 
             run_server(Worker[Request, Response], rpc, [addr])
         except KeyboardInterrupt:
@@ -90,19 +125,32 @@ def run_results(lc, addr):
             raise
 
 
+def run_metrics(lc, addr):
+    with logging_setup(lc), cov():
+        try:
+            rpc = MetricReceiver()
+
+            run_server(MetricReceiver, rpc, [addr])
+        except KeyboardInterrupt:
+            return
+        except:
+            logging.exception('')
+            raise
+
+
 def build_logging():
     return logging_setup(LoggerSetup(LL(None, logging.DEBUG), [], ['stream:///stderr']))
 
 
 class TestBroker(unittest.TestCase):
-    def test_udp(self):
+    def test_workflow(self):
         conf = BrokerConf()
         broker_addr = 'udp://127.0.0.1:7483'
         res_addr = 'udp://127.0.0.1:7485'
         w_addr = 'udp://127.0.0.1'
 
         with build_logging(), PopenStack(timeout=10.) as s:
-            a = popen(run_broker, logging_config(), conf, broker_addr, res_addr)
+            a = popen(run_broker, logging_config(), conf, broker_addr, res_addr, None)
             s.add(a)
             b = popen(run_worker, logging_config(), conf, w_addr, broker_addr)
             s.add(b)
@@ -153,7 +201,7 @@ class TestBroker(unittest.TestCase):
 
             with build_ts(Worker[Request, Response], w_addr) as w:
 
-                #w: Worker
+                # w: Worker
                 os.kill(w.pid(), SIGKILL)
 
             with build_ts(Broker[Request, Response], broker_addr) as br:
@@ -164,3 +212,41 @@ class TestBroker(unittest.TestCase):
             c.send_signal(SIGTERM)
             a.send_signal(SIGTERM)
 
+    def test_metrics(self):
+        conf = BrokerConf(metrics=0.5)
+        broker_addr = 'udp://127.0.0.1:7483'
+        metric_addr = 'udp://127.0.0.1:8845'
+        w_addr = 'udp://127.0.0.1'
+        w_addr_2 = 'udp://127.0.0.1'
+
+        with build_logging(), PopenStack(timeout=10.) as s:
+            a = popen(run_broker, logging_config(), conf, broker_addr, res_addr=None, url_metrics=metric_addr)
+            s.add(a)
+            b = popen(run_worker, logging_config(), conf, w_addr, broker_addr,
+                      worker_fun=worker_function_sleeper,
+                      url_metrics=metric_addr)
+            s.add(b)
+
+            c = popen(run_metrics, logging_config(), metric_addr)
+
+            s.add(c)
+
+            with build_ts(Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
+                br.assign(Request(5))
+
+            x = {}
+            while len(x) <= 1:
+                with build_ts(MetricReceiver, metric_addr, ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
+                    x = mr.metric_counts()
+                    logging.getLogger(__name__).debug(x)
+                    sleep(0.3)
+
+            while len(x) >= 2:
+                with build_ts(MetricReceiver, metric_addr, ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
+                    x = mr.metric_counts()
+                    logging.getLogger(__name__).debug(x)
+                    sleep(0.3)
+
+            b.send_signal(SIGTERM)
+            c.send_signal(SIGTERM)
+            a.send_signal(SIGTERM)

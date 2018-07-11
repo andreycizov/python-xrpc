@@ -7,6 +7,7 @@ SERVER_SERDE_INST = SerdeInst([
     types.CallableArgsSerde(),
     types.CallableRetSerde(),
     types.ForwardRefSerde(),
+    types.OptionalSerde(),
     types.UnionSerde(),
     types.BytesSerde(),
     types.DateTimeSerde(),

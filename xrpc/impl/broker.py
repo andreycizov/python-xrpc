@@ -14,7 +14,9 @@ from collections import deque
 from datetime import datetime
 from itertools import count
 from time import sleep
-from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple
+from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple, Union
+
+from dataclasses import dataclass
 
 from xrpc.logging import logging_config, LoggerSetup, logging_setup, circuitbreaker
 from xrpc.popen import popen
@@ -25,7 +27,7 @@ from xrpc.dsl import rpc, RPCType, regular, socketio, signal
 from xrpc.error import HorizonPassedError, TimeoutError, TerminationException
 from xrpc.runtime import service, sender
 from xrpc.serde.abstract import SerdeSet, SerdeStruct
-from xrpc.serde.types import pair_spec, build_types, ARGS_RET
+from xrpc.serde.types import pair_spec, build_types, ARGS_RET, PairSpec
 from xrpc.transport import recvfrom_helper, Packet, Origin
 from xrpc.util import time_now, signal_context
 
@@ -67,10 +69,31 @@ class BrokerConf(NamedTuple):
         )
 
 
+@dataclass
+class WorkerMetric:
+    running_since: Optional[datetime]
+
+
+@dataclass
+class BrokerMetric:
+    workers: int
+    jobs_pending: int
+    jobs: int
+    assigned: int
+
+
+NodeMetric = Union[WorkerMetric, BrokerMetric]
+
 RequestType = TypeVar('RequestType')
 ResponseType = TypeVar('ResponseType')
 
 WorkerCallable = Callable[[RequestType], ResponseType]
+
+
+class MetricCollector:
+    @rpc(RPCType.Signalling)
+    def metrics(self, metric: NodeMetric):
+        pass
 
 
 def get_func_types(fn: WorkerCallable) -> Tuple[Type[RequestType], Type[ResponseType]]:
@@ -80,9 +103,9 @@ def get_func_types(fn: WorkerCallable) -> Tuple[Type[RequestType], Type[Response
     spec = getfullargspec(fn)
     is_method = ismethod(fn)
     annot = build_types(spec, is_method, allow_missing=True)
-    arg_name, _, _, _ = next(pair_spec(spec, is_method, None))
+    arg = next(PairSpec(spec, is_method)(None))
 
-    return annot[arg_name], annot[ARGS_RET]
+    return annot[arg.name], annot[ARGS_RET]
 
 
 def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, path: str):
@@ -137,7 +160,11 @@ class Worker(Generic[RequestType, ResponseType]):
     def __init__(
             self,
             cls_req: Type[RequestType], cls_res: Type[ResponseType],
-            conf: BrokerConf, broker_addr: Origin, fn: WorkerCallable[RequestType, ResponseType]):
+            conf: BrokerConf,
+            broker_addr: Origin,
+            fn: WorkerCallable[RequestType, ResponseType],
+            url_metrics: Optional[str] = None
+    ):
         self.cls_req = cls_req
         self.cls_res = cls_res
 
@@ -145,7 +172,9 @@ class Worker(Generic[RequestType, ResponseType]):
 
         self.conf = conf
         self.broker_addr = broker_addr
+        self.url_metrics = url_metrics
         self.assigned: Optional[RequestType] = None
+        self.running_since: Optional[datetime] = None
 
         self.dir = None
         self.dir = tempfile.mkdtemp()
@@ -187,6 +216,8 @@ class Worker(Generic[RequestType, ResponseType]):
         self.socket.send(op.pack())
         self.assigned = pars
 
+        self.running_since = time_now()
+
     @rpc(RPCType.Repliable)
     def pid(self) -> int:
         return int(self.inst.pid)
@@ -224,7 +255,18 @@ class Worker(Generic[RequestType, ResponseType]):
             except HorizonPassedError:
                 logging.getLogger('bg').exception('Seems like the broker had been killed while I was working')
 
+            self.running_since = None
+
         return self.socket
+
+    @regular()
+    def metrics(self) -> float:
+        if self.url_metrics:
+            s = service(MetricCollector, self.url_metrics)
+            s.metrics(WorkerMetric(
+                self.running_since
+            ))
+        return self.conf.metrics
 
     @signal()
     def exit(self):
@@ -272,13 +314,16 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
     def __init__(
             self,
             cls_req: Type[RequestType], cls_res: Type[ResponseType],
-            conf: BrokerConf, url_results: Optional[str] = None
+            conf: BrokerConf,
+            url_results: Optional[str] = None,
+            url_metrics: Optional[str] = None
     ):
         self.cls_req = cls_req
         self.cls_res = cls_res
 
         self.conf = conf
         self.url_results = url_results
+        self.url_metrics = url_metrics
 
         self.workers: Dict[Origin, WorkerState] = {}
 
@@ -418,10 +463,16 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
 
     @regular()
     def metrics(self) -> float:
-        logging.getLogger('metrics').warning('Workers %d', len(self.workers))
-        logging.getLogger('metrics').warning('Pending %d', len(self.jobs_pending))
-        logging.getLogger('metrics').warning('Jobs %d', len(self.jobs))
-        logging.getLogger('metrics').warning('Assigned %d', len(self.workers_jobs))
+        # how to we allow for reflection in the API?
+
+        if self.url_metrics:
+            s = service(MetricCollector, self.url_metrics)
+            s.metrics(BrokerMetric(
+                len(self.workers),
+                len(self.jobs_pending),
+                len(self.jobs),
+                len(self.workers_jobs)
+            ))
 
         return self.conf.metrics
 

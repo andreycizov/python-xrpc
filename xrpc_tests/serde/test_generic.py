@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from xrpc.const import SERVER_SERDE_INST
 from xrpc.serde.abstract import SerdeSet
+from xrpc.serde.error import SerdeException
 from xrpc.serde.types import CallableArgsWrapper, CallableRetWrapper
 
 T = TypeVar('T')
@@ -67,8 +68,11 @@ class TestGeneric(unittest.TestCase):
 
         self.assertEqual(x, y)
 
-        with self.assertRaises(ValueError):
+        try:
             a.struct(SERVER_SERDE_INST).serialize(fa, [(5, 'asd'), {}])
+        except SerdeException as e:
+            self.assertEqual('asd', e.resolve().val)
+            self.assertEqual('int', e.resolve().kwargs['t'])
 
     def test_generic_method_ret(self):
         fa = CallableRetWrapper.from_func_cls(Runner[int], Runner.method)
@@ -83,5 +87,8 @@ class TestGeneric(unittest.TestCase):
 
         self.assertEqual(x, y)
 
-        with self.assertRaises(ValueError):
+        try:
             a.struct(SERVER_SERDE_INST).serialize(fa, 'str')
+        except SerdeException as e:
+            self.assertEqual('str', e.resolve().val)
+            self.assertEqual('int', e.resolve().kwargs['t'])
