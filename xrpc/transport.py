@@ -84,7 +84,7 @@ def recvfrom_helper(fd, buffer_size=2 ** 16, logger_name='net.trace.raw'):
             buffer, addr = fd.recvfrom(buffer_size)
 
             if len(buffer) == 0:
-                break
+                raise ConnectionAbortedError('Zero bytes received')
 
             try:
                 yield Packet.unpack(addr, buffer)
@@ -124,7 +124,14 @@ class UDPTransport(Transport):
 
         logging.getLogger('net.trace.raw.o').debug('[%d] %s %s', len(packet.data), addr, packet.data)
 
-        return self.fd.sendto(packet.pack(), addr)
+        try:
+            return self.fd.sendto(packet.pack(), addr)
+        except socket.gaierror as e:
+            if str(e).endswith('Name or service not known'):
+                logging.getLogger('net.trace.raw.e').debug('%s %s', addr, e)
+                return None
+            else:
+                raise
 
     def read(self) -> Iterable[Packet]:
         for x in recvfrom_helper(self.fd, self.buffer):

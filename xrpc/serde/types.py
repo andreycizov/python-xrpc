@@ -115,8 +115,6 @@ class UnionSerde(SerdeType):
         if r:
             sub_args = t.__args__
 
-            print('a', t, len(sub_args), sub_args)
-
             if sub_args[-1] == type(None):
                 return False
             elif len(sub_args) == 1:
@@ -175,8 +173,6 @@ class OptionalSerde(SerdeType):
         if r:
             sub_args = t.__args__
 
-            print('b', t, len(sub_args), sub_args)
-
             if sub_args[-1] == type(None) and len(sub_args) == 2:
                 return True
             elif len(sub_args) == 1:
@@ -206,8 +202,6 @@ class OptionalSerde(SerdeType):
             deps = [Union[args]]
         else:
             deps = [args[0]]
-
-        print(t, args, deps)
 
         return SerdeNode(self.norm(i, t, ctx), deps, ctx)
 

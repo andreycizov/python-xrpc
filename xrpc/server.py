@@ -32,7 +32,7 @@ class SpecialException(Exception):
 
 def signal_handler_wrapper(code: int, frame, key: str, conf, fn, fn_ec: ExecutionContextCallable,
                            prev_signals: PrevSignals, running_instance=None):
-    should_pass = fn_ec().exec(fn, running_instance)
+    should_pass = fn_ec().exec('sig', fn, running_instance)
     logging.getLogger('sig.wrapper').debug('Code=%s Frame=%s ShouldPass=%s', code, frame, should_pass)
     if should_pass:
         prev_signals[(key, code)](code, frame)
@@ -275,7 +275,7 @@ def run_server(cls, running_instance, bind_urls: List[str], horizon_each=60.):
                         ctx = ExecutionContext(transport_stack, raw_packet.addr, p.key, ret=replier)
                         rpc_fn = rpcs[p.name].fn
                         try:
-                            ret = ctx.exec(rpc_fn, running_instance, *args, **kwargs)
+                            ret = ctx.exec('call', rpc_fn, running_instance, *args, **kwargs)
                         except TerminationException:
                             raise
                         except Exception as e:
@@ -306,7 +306,7 @@ def run_server(cls, running_instance, bind_urls: List[str], horizon_each=60.):
             if should_regular:
                 for name, regular, callable in [(k, *regulars[k]) for k, v in max_poll_regulars.items() if v <= 0.]:
                     try:
-                        x: float = ExecutionContext(transport_stack).exec(callable, running_instance)
+                        x: float = ExecutionContext(transport_stack).exec('reg', callable, running_instance)
                     except TerminationException:
                         state.is_running = False
                         raise SpecialException()
@@ -321,7 +321,7 @@ def run_server(cls, running_instance, bind_urls: List[str], horizon_each=60.):
                     if is_ready:
                         callable = socketios[key][1]
 
-                        r = ExecutionContext(transport_stack).exec(callable, running_instance)
+                        r = ExecutionContext(transport_stack).exec('io', callable, running_instance)
 
                         assert r is not None, key
 

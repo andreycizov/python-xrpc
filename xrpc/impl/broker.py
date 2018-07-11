@@ -222,15 +222,22 @@ class Worker(Generic[RequestType, ResponseType]):
     def pid(self) -> int:
         return int(self.inst.pid)
 
-    @regular()
-    def heartbeat(self) -> float:
+    def is_killed(self) -> bool:
         try:
             self.inst.wait(0)
-            self.exit()
             logging.getLogger(__name__).warning('Worker process had been killed')
-            raise TerminationException()
+            return True
         except TimeoutExpired:
-            pass
+            return False
+
+    def possibly_killed(self, definitely=False):
+        if definitely or self.is_killed():
+            self.exit()
+            raise TerminationException()
+
+    @regular()
+    def heartbeat(self) -> float:
+        self.possibly_killed()
 
         s = service(Broker[self.cls_req, self.cls_res], self.broker_addr)
         s.remind()
@@ -239,23 +246,26 @@ class Worker(Generic[RequestType, ResponseType]):
 
     @socketio()
     def bg(self):
-        for x in recvfrom_helper(self.socket):
-            logging.getLogger('net.trace.raw.i').debug('[%d] %s %s', len(x.data), x.addr, x.data)
+        try:
+            for x in recvfrom_helper(self.socket):
+                logging.getLogger('net.trace.raw.i').debug('[%d] %s %s', len(x.data), x.addr, x.data)
 
-            ret = self.serde.deserialize(self.cls_res, json.loads(x.data))
+                ret = self.serde.deserialize(self.cls_res, json.loads(x.data))
 
-            logging.getLogger('bg').debug('Returned %s', x)
+                logging.getLogger('bg').debug('Returned %s', x)
 
-            self.assigned = None
+                self.assigned = None
 
-            s = service(Broker[self.cls_req, self.cls_res], self.broker_addr)
+                s = service(Broker[self.cls_req, self.cls_res], self.broker_addr)
 
-            try:
-                s.done(ret)
-            except HorizonPassedError:
-                logging.getLogger('bg').exception('Seems like the broker had been killed while I was working')
+                try:
+                    s.done(ret)
+                except HorizonPassedError:
+                    logging.getLogger('bg').exception('Seems like the broker had been killed while I was working')
 
-            self.running_since = None
+                self.running_since = None
+        except ConnectionAbortedError:
+            self.possibly_killed(True)
 
         return self.socket
 

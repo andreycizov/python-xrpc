@@ -1,3 +1,4 @@
+import logging
 import threading
 from typing import Optional, NamedTuple, Callable, Dict, TypeVar, Type, Any
 
@@ -17,12 +18,19 @@ class ExecutionContext(NamedTuple):
     key: Optional[RPCKey] = None
     ret: Optional[Callable[[Any], None]] = None
 
-    def exec(self, fn: Callable, *args, **kwargs):
+    def exec(self, __origin, __fn: Callable, *args, **kwargs):
+        is_ok = False
+        r = None
+
+        logging.getLogger(f'xrpc.trace.e.{__origin}').debug('Name=%s %s %s %s %s', __fn.__name__, is_ok, args, kwargs, r)
         try:
             context_set(self)
 
-            return fn(*args, **kwargs)
+            r = __fn(*args, **kwargs)
+            is_ok = True
+            return r
         finally:
+            logging.getLogger(f'xrpc.trace.x.{__origin}').debug('Name=%s %s %s %s %s', __fn.__name__, is_ok, args, kwargs, r)
             context_set(None)
 
 

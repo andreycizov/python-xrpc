@@ -250,3 +250,9 @@ class TestBroker(unittest.TestCase):
             b.send_signal(SIGTERM)
             c.send_signal(SIGTERM)
             a.send_signal(SIGTERM)
+
+    def test_sending_to_unknown_host(self):
+        metric_addr = 'udp://1asdasjdklasjdasd:8845'
+
+        with build_ts(MetricReceiver, metric_addr) as mr:
+            mr.metrics(WorkerMetric(None))
