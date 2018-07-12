@@ -138,7 +138,9 @@ class UDPTransport(Transport):
             logging.getLogger('net.trace.raw.i').debug('[%d] %s %s', len(x.data), x.addr,
                                                        x.data)
 
-            yield Packet(f'udp://{x.addr}:{x.port}', x.data)
+            addr, port = x.addr
+
+            yield Packet(f'udp://{addr}:{port}', x.data)
 
     def close(self):
         self.fd.close()
