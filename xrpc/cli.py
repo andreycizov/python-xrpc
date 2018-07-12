@@ -41,7 +41,6 @@ class Parsable:
                 type=type_,
                 help=help,
             )
-            print(f)
 
     @classmethod
     def from_parser(cls: Type[T], prefix, d, forget_other=True) -> T:
