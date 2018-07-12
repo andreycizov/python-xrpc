@@ -17,7 +17,7 @@ def build_generic_context(*args):
 
 if sys.version_info >= (3, 7):
     from typing import Any, ForwardRef, Optional, Union, List, Dict, Callable, \
-    NamedTuple, Tuple, TypeVar, Iterable
+        NamedTuple, Tuple, TypeVar, Iterable
 else:
     from typing import Any, _ForwardRef, Optional, Union, List, Dict, Callable, \
         NamedTuple, Tuple, TypeVar, Iterable
@@ -96,6 +96,13 @@ def descriptor_classname(is_inst, t):
         return t.__class__.__name__
 
 
+def is_union(t):
+    if sys.version_info >= (3, 7):
+        return getattr(t, '__origin__', None) is Union
+    else:
+        return t.__class__.__name__ == '_Union'
+
+
 class UnionSerde(SerdeType):
     cls_deserializer = UnionDeserializer
     cls_serializer = UnionSerializer
@@ -107,10 +114,7 @@ class UnionSerde(SerdeType):
         super().__init__()
 
     def match(self, t: Any) -> bool:
-        if sys.version_info >= (3, 7):
-            r = getattr(t, '__origin__', None) is Union
-        else:
-            r = t.__class__.__name__ == '_Union'
+        r = is_union(t)
 
         if r:
             sub_args = t.__args__
@@ -165,10 +169,7 @@ class OptionalSerde(SerdeType):
     cls_serializer = OptionalDeserializer
 
     def match(self, t: Any) -> bool:
-        if sys.version_info >= (3, 7):
-            r = getattr(t, '__origin__', None) is Union
-        else:
-            r = t.__class__.__name__ == '_Union'
+        r = is_union(t)
 
         if r:
             sub_args = t.__args__
@@ -749,6 +750,7 @@ class PairSpecValue:
     arg: Any
     """Given argument to the function"""
     default_arg: Any
+
 
 @dataclass
 class PairSpec:

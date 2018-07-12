@@ -1,3 +1,5 @@
+from urllib.parse import urlparse, parse_qs, ParseResult, urlunparse
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, NamedTuple
@@ -18,16 +20,36 @@ class ClientConfig(NamedTuple):
     """If ```HorizonPassedError``` is passed, restart the action"""
 
 
+def dest_overrides(url):
+    r: ParseResult = urlparse(url)
+    qs = parse_qs(r.query) if r.query else {}
+    r = r._replace(query=None)
+    r = urlunparse(r)
+
+    return {k: v[0] for k, v in qs.items()}, r
+
+
 class ServiceWrapper:
     def __init__(self, defn: ServiceDefn, conf: ClientConfig, transport: RPCTransportStack, dest: Origin):
         self.transport = transport
-        self.dest = dest
+        self.overrides, self.dest = dest_overrides(dest)
         self.defn = defn
         self.conf = conf
 
+    def _assert(self):
+        missing = []
+        for x in self.overrides.keys():
+            if x not in self.defn.rpcs:
+                missing.append(x)
+        if len(missing):
+            assert False, missing
+
     def __getattr__(self, item):
-        if item in self.defn.rpcs:
-            return CallWrapper(self, item)
+        f1 = item in self.defn.rpcs
+        alias = self.overrides.get(item)
+
+        if f1 or alias:
+            return CallWrapper(self, item, alias)
         else:
             raise AttributeError(item)
 
@@ -36,6 +58,7 @@ class ServiceWrapper:
 class RequestWrapper:
     type: ServiceWrapper
     name: str
+    alias: Optional[str]
     key: RPCKey = field(default_factory=RPCKey)
 
     def __call__(self, *args, **kwargs):
@@ -43,7 +66,7 @@ class RequestWrapper:
         i, o = self.type.defn.rpcs_serde[self.name]
         payload = self.type.defn.serde.serialize(i, [args, kwargs])
 
-        packet = RPCPacket(self.key, RPCPacketType.Req, self.name, payload)
+        packet = RPCPacket(self.key, RPCPacketType.Req, self.alias or self.name, payload)
 
         # the only difference between a client and a server is NONE.
         # the only issue would be the routing of the required packets to the required instances
@@ -95,7 +118,8 @@ class RequestWrapper:
                     # todo transform transport sends to
                     # todo an ability to buffer the transport outputs
 
-                    flags = select_helper([x.fd for x in self.type.transport.transports], max_wait=max(0., self.type.conf.timeout_resend))
+                    flags = select_helper([x.fd for x in self.type.transport.transports],
+                                          max_wait=max(0., self.type.conf.timeout_resend))
 
                     self.type.transport.recv(flags)
                 return ret
@@ -107,20 +131,21 @@ class RequestWrapper:
             raise NotImplementedError(c.conf.type)
 
 
+@dataclass()
 class CallWrapper:
-    def __init__(self, type: ServiceWrapper, name: str):
-        self.type = type
-        self.name = name
+    type: ServiceWrapper
+    name: str
+    alias: Optional[str]
 
     def __call__(self, *args, **kwargs):
         while True:
             try:
-                return RequestWrapper(self.type, self.name)(*args, **kwargs)
+                return RequestWrapper(self.type, self.name, self.alias)(*args, **kwargs)
             except HorizonPassedError:
                 if self.type.conf.ignore_horizon:
                     continue
                 raise
 
 
-def build_wrapper(pt: ServiceDefn, transport: RPCTransportStack, dest: Origin, conf: ClientConfig=ClientConfig()):
+def build_wrapper(pt: ServiceDefn, transport: RPCTransportStack, dest: Origin, conf: ClientConfig = ClientConfig()):
     return ServiceWrapper(pt, conf, transport, dest)

@@ -113,6 +113,7 @@ def popen_main():
 
             fn = defn.fn
 
+            logging.getLogger(__name__).debug('%s', defn)
             fn(*defn.args, **defn.kwargs)
 
 

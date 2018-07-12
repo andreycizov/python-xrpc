@@ -12,6 +12,10 @@ class TestUDPTransport(unittest.TestCase):
         with Transport.from_url('udp://0.0.0.0') as t:
             pass
 
+    def test_empty_addr_any(self):
+        with Transport.from_url('udp://') as t:
+            pass
+
     def test_cool(self):
         with Transport.from_url('udp://0.0.0.0:23454') as t:
             pass

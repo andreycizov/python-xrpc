@@ -1,8 +1,7 @@
 import heapq
-import math
 from collections import deque
 from datetime import datetime
-from typing import TypeVar, Generic, List, Optional, Any, Deque
+from typing import TypeVar, Generic, List, Optional, Deque
 
 from xrpc.util import time_now
 
