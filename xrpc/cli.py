@@ -1,12 +1,12 @@
 from argparse import ArgumentParser
-from typing import Any
+from typing import Any, TypeVar, Type
 
 from dataclasses import fields, dataclass, _MISSING_TYPE, MISSING
 
 from xrpc.logging import _dict_split_prefix
 from xrpc.serde.types import is_union
 
-
+T = TypeVar('T')
 
 
 class Parsable:
@@ -44,7 +44,10 @@ class Parsable:
             print(f)
 
     @classmethod
-    def from_parser(cls, prefix, d):
+    def from_parser(cls: Type[T], prefix, d, forget_other=True) -> T:
         a, b = _dict_split_prefix(d, prefix + '_')
 
-        return b, cls(**a)
+        if forget_other:
+            return cls(**a)
+        else:
+            return b, cls(**a)

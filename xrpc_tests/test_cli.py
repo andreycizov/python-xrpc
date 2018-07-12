@@ -25,4 +25,5 @@ class TestCli(unittest.TestCase):
         B.parser('x', p)
 
         # self.assertEqual({'field_unit': 5}, self.parse(p, '-h'))
-        self.assertEqual(({}, B(5)), B.from_parser('x', self.parse(p, '--x_field_unit', '5')))
+        self.assertEqual(B(5), B.from_parser('x', self.parse(p, '--x_field_unit', '5')))
+        self.assertEqual(({}, B(5)), B.from_parser('x', self.parse(p, '--x_field_unit', '5'), forget_other=False))

@@ -18,6 +18,7 @@ from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic
 
 from dataclasses import dataclass
 
+from xrpc.cli import Parsable
 from xrpc.logging import logging_config, LoggerSetup, logging_setup, circuitbreaker
 from xrpc.popen import popen
 from xrpc.abstract import MutableInt
@@ -32,41 +33,12 @@ from xrpc.transport import recvfrom_helper, Packet, Origin
 from xrpc.util import time_now, signal_context
 
 
-class BrokerConf(NamedTuple):
+@dataclass
+class BrokerConf(Parsable):
     heartbeat: float = 5.
     max_pings: int = 5
     metrics: float = 10.
 
-    @classmethod
-    def from_parser(cls, **kwargs):
-        return BrokerConf(
-            kwargs['heartbeat'],
-            kwargs['max_pings'],
-            kwargs['metrics'],
-        )
-
-    @classmethod
-    def add_parser(cls, parser: ArgumentParser):
-        parser.add_argument(
-            '--hearbeat',
-            dest='heartbeat',
-            type=float,
-            default=5.
-        )
-
-        parser.add_argument(
-            '--pings',
-            dest='max_pings',
-            type=int,
-            default=5
-        )
-
-        parser.add_argument(
-            '--metrics',
-            dest='metrics',
-            type=float,
-            default=5
-        )
 
 
 @dataclass
