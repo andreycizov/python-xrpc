@@ -12,7 +12,7 @@ if sys.version_info >= (3, 7):
 
 setup(
     name='xrpc',
-    version='0.0.1a6',
+    version='0.0.1a7',
     author='Andrey Cizov',
     author_email='acizov@gmail.com',
     packages=find_packages(include=('xrpc', 'xrpc.*',)),
