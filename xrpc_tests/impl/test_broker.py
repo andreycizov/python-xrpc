@@ -1,10 +1,10 @@
 import logging
 import os
-import unittest
 from _signal import SIGTERM, SIGKILL
-from collections import defaultdict, deque
+from collections import defaultdict
+from datetime import datetime, timedelta
 from time import sleep
-from typing import Dict
+from typing import Dict, Optional
 
 from dataclasses import dataclass
 
@@ -12,11 +12,9 @@ from xrpc.client import ClientConfig
 from xrpc.dsl import RPCType, rpc, regular, signal
 from xrpc.error import TerminationException
 from xrpc.impl.broker import Broker, Worker, BrokerConf, BrokerResult, MetricCollector, NodeMetric, WorkerMetric
-from xrpc.logging import logging_setup, LoggerSetup, LL, logging_config
-from xrpc.popen import popen, PopenStack, cov
-from xrpc.server import run_server
+from xrpc.util import time_now
 from xrpc_tests.examples.test_generic import build_ts
-from xrpc_tests.examples.test_pong import wait_items
+from xrpc_tests.mp.abstract import ProcessHelperCase, server_main
 
 
 @dataclass(eq=True, frozen=True)
@@ -29,10 +27,18 @@ class Response:
     val: int = 6
 
 
-class ResultsReceiver(BrokerResult[Response]):
+@dataclass
+class ResultsReceiver:
+    exit_in: Optional[datetime] = None
+
     @rpc(RPCType.Durable)
-    def finished(self, job: Response):
-        logging.debug('Finished')
+    def finished_a(self, job: Response):
+        self.exit_in = time_now() + timedelta(seconds=0.5)
+        logging.debug('Finished %s', self.exit_in)
+
+    @rpc(RPCType.Durable)
+    def finished_b(self, job: Response):
+        logging.debug('Finished %s', self.exit_in)
         raise TerminationException('Finished')
 
     @signal()
@@ -42,6 +48,10 @@ class ResultsReceiver(BrokerResult[Response]):
     @regular()
     def reg(self) -> float:
         logging.debug('Still waiting')
+
+        if self.exit_in and time_now() > self.exit_in:
+            raise TerminationException('Finished')
+
         return 1.
 
 
@@ -70,24 +80,6 @@ class MetricReceiver(MetricCollector):
         return {k: v for k, v in r.items() if v > 0}
 
 
-def run_broker(lc, conf, broker_addr, res_addr=None, url_metrics=None):
-    with logging_setup(lc), cov():
-        try:
-            rpc = Broker[Request, Response](
-                Request,
-                Response,
-                conf,
-                res_addr,
-                url_metrics,
-            )
-            run_server(Broker[Request, Response], rpc, [broker_addr])
-        except KeyboardInterrupt:
-            return
-        except:
-            logging.exception('')
-            raise
-
-
 def worker_function(req: Request) -> Response:
     return Response(req.val + 1)
 
@@ -97,86 +89,96 @@ def worker_function_sleeper(req: Request) -> Response:
     return Response(req.val + 99)
 
 
-def run_worker(lc, conf, addr, broker_addr, url_metrics=None, worker_fun=None):
-    with logging_setup(lc), cov():
-        try:
-            if worker_fun is None:
-                worker_fun = worker_function
-            rpc = Worker(Request, Response, conf, broker_addr, worker_fun, url_metrics)
-
-            run_server(Worker[Request, Response], rpc, [addr])
-        except KeyboardInterrupt:
-            return
-        except:
-            logging.exception('')
-            raise
+def run_broker(broker_addr, conf, res_addr=None, url_metrics=None):
+    rpc = Broker[Request, Response](
+        Request,
+        Response,
+        conf,
+        res_addr,
+        url_metrics,
+    )
+    return Broker[Request, Response], rpc
 
 
-def run_results(lc, addr):
-    with logging_setup(lc), cov():
-        try:
-            rpc = ResultsReceiver()
-
-            run_server(ResultsReceiver, rpc, [addr])
-        except KeyboardInterrupt:
-            return
-        except:
-            logging.exception('')
-            raise
+def run_worker(addr, conf, broker_addr, url_metrics=None, worker_fun=None):
+    if worker_fun is None:
+        worker_fun = worker_function
+    rpc = Worker(Request, Response, conf, broker_addr, worker_fun, url_metrics)
+    return Worker[Request, Response], rpc
 
 
-def run_metrics(lc, addr):
-    with logging_setup(lc), cov():
-        try:
-            rpc = MetricReceiver()
-
-            run_server(MetricReceiver, rpc, [addr])
-        except KeyboardInterrupt:
-            return
-        except:
-            logging.exception('')
-            raise
+def run_results(addr):
+    return ResultsReceiver, ResultsReceiver()
 
 
-def build_logging():
-    return logging_setup(LoggerSetup(LL(None, logging.DEBUG), [], ['stream:///stderr']))
+def run_metrics(addr):
+    return MetricReceiver, MetricReceiver()
 
 
-class TestBroker(unittest.TestCase):
-    def test_workflow(self):
+class TestBroker(ProcessHelperCase):
+    def test_workflow_a(self):
         conf = BrokerConf()
         broker_addr = 'udp://127.0.0.1:7483'
-        res_addr = 'udp://127.0.0.1:7485'
+        res_addr = 'udp://127.0.0.1:7485?finished=finished_a'
         w_addr = 'udp://127.0.0.1'
 
-        with build_logging(), PopenStack(timeout=10.) as s:
-            a = popen(run_broker, logging_config(), conf, broker_addr, res_addr, None)
-            s.add(a)
-            b = popen(run_worker, logging_config(), conf, w_addr, broker_addr)
-            s.add(b)
-            c = popen(run_results, logging_config(), res_addr)
-            s.add(c)
+        a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr, None)
+        b = self.ps.popen(server_main, run_worker, w_addr, conf, broker_addr)
+        c = self.ps.popen(server_main, run_results, res_addr)
 
-            with build_ts(Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
-                x = 0
-                while x == 0:
-                    x, = br.stats()
-                    sleep(1)
+        with self.ps.timer(5.) as tr, build_ts(
+                Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
+            x = 0
+            while x == 0:
+                x, = br.stats()
+                tr.sleep(1.)
 
-            with build_ts(Broker[Request, Response], broker_addr) as br:
-                br.assign(Request(1))
+        with build_ts(Broker[Request, Response], broker_addr) as br:
+            br.assign(Request(1))
 
-            wait_items([c])
+        self.ps.wait([c])
 
-            b.send_signal(SIGTERM)
+        b.send_signal(SIGTERM)
 
-            with build_ts(Broker[Request, Response], broker_addr) as br:
-                x = 1
-                while x > 0:
-                    x, = br.stats()
-                    sleep(1)
+        with self.ps.timer(5.) as tr, build_ts(Broker[Request, Response], broker_addr) as br:
+            x = 1
+            while x > 0:
+                x, = br.stats()
+                tr.sleep(1)
 
-            a.send_signal(SIGTERM)
+        a.send_signal(SIGTERM)
+
+    def test_workflow_b(self):
+        conf = BrokerConf()
+        broker_addr = 'udp://127.0.0.1:7483'
+        res_addr = 'udp://127.0.0.1:7485?finished=finished_b'
+        w_addr = 'udp://127.0.0.1'
+
+        a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr, None)
+        b = self.ps.popen(server_main, run_worker, w_addr, conf, broker_addr)
+        c = self.ps.popen(server_main, run_results, res_addr)
+
+        with self.ps.timer(5.) as tr, build_ts(
+                Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
+            x = 0
+            while x == 0:
+                x, = br.stats()
+                tr.sleep(1.)
+
+        with build_ts(Broker[Request, Response], broker_addr) as br:
+            br.assign(Request(1))
+
+        self.ps.wait([c])
+
+        b.send_signal(SIGTERM)
+
+        with self.ps.timer(5.) as tr, build_ts(Broker[Request, Response], broker_addr) as br:
+            x = 1
+            while x > 0:
+                x, = br.stats()
+                tr.sleep(1)
+
+        a.send_signal(SIGTERM)
 
     def test_kill_child(self):
         conf = BrokerConf(heartbeat=0.5, max_pings=10)
@@ -184,33 +186,28 @@ class TestBroker(unittest.TestCase):
         res_addr = 'udp://127.0.0.1:54547'
         w_addr = 'udp://127.0.0.1:54548'
 
-        with build_logging(), PopenStack(timeout=10.) as s:
-            a = popen(run_broker, logging_config(), conf, broker_addr, res_addr)
-            s.add(a)
-            # todo: add a worker that is killed mid-execution
-            b = popen(run_worker, logging_config(), conf, w_addr, broker_addr)
-            s.add(b)
-            c = popen(run_results, logging_config(), res_addr)
-            s.add(c)
+        a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr, None)
+        b = self.ps.popen(server_main, run_worker, w_addr, conf, broker_addr)
+        c = self.ps.popen(run_results, res_addr)
 
-            with build_ts(Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
-                x = 0
-                while x == 0:
-                    x, = br.stats()
-                    sleep(1)
+        with self.ps.timer(5.) as tr, build_ts(
+                Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
+            x = 0
+            while x == 0:
+                x, = br.stats()
+                tr.sleep(1)
 
-            with build_ts(Worker[Request, Response], w_addr) as w:
+        with build_ts(Worker[Request, Response], w_addr) as w:
+            # w: Worker
+            os.kill(w.pid(), SIGKILL)
 
-                # w: Worker
-                os.kill(w.pid(), SIGKILL)
-
-            with build_ts(Broker[Request, Response], broker_addr) as br:
-                x = 1
-                while x > 0:
-                    x, = br.stats()
-                    sleep(1)
-            c.send_signal(SIGTERM)
-            a.send_signal(SIGTERM)
+        with self.ps.timer(5.) as tr, build_ts(Broker[Request, Response], broker_addr) as br:
+            x = 1
+            while x > 0:
+                x, = br.stats()
+                tr.sleep(1)
+        c.send_signal(SIGTERM)
+        a.send_signal(SIGTERM)
 
     def test_metrics(self):
         conf = BrokerConf(metrics=0.5)
@@ -219,37 +216,33 @@ class TestBroker(unittest.TestCase):
         w_addr = 'udp://127.0.0.1'
         w_addr_2 = 'udp://127.0.0.1'
 
-        with build_logging(), PopenStack(timeout=10.) as s:
-            a = popen(run_broker, logging_config(), conf, broker_addr, res_addr=None, url_metrics=metric_addr)
-            s.add(a)
-            b = popen(run_worker, logging_config(), conf, w_addr, broker_addr,
-                      worker_fun=worker_function_sleeper,
-                      url_metrics=metric_addr)
-            s.add(b)
+        a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr=None, url_metrics=metric_addr)
+        b = self.ps.popen(server_main, run_worker, w_addr, conf, broker_addr,
+                          worker_fun=worker_function_sleeper,
+                          url_metrics=metric_addr)
+        c = self.ps.popen(server_main, run_metrics, metric_addr)
 
-            c = popen(run_metrics, logging_config(), metric_addr)
+        with build_ts(Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
+            br.assign(Request(5))
 
-            s.add(c)
-
-            with build_ts(Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
-                br.assign(Request(5))
-
-            x = {}
+        x = {}
+        with self.ps.timer(20) as tr, build_ts(MetricReceiver, metric_addr,
+                                             ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
             while len(x) <= 1:
-                with build_ts(MetricReceiver, metric_addr, ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
-                    x = mr.metric_counts()
-                    logging.getLogger(__name__).debug(x)
-                    sleep(0.3)
+                x = mr.metric_counts()
+                logging.getLogger(__name__).debug(x)
+                tr.sleep(0.3)
 
+        with self.ps.timer(20) as tr, build_ts(MetricReceiver, metric_addr,
+                                             ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
             while len(x) >= 2:
-                with build_ts(MetricReceiver, metric_addr, ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
-                    x = mr.metric_counts()
-                    logging.getLogger(__name__).debug(x)
-                    sleep(0.3)
+                x = mr.metric_counts()
+                logging.getLogger(__name__).debug(x)
+                tr.sleep(0.3)
 
-            b.send_signal(SIGTERM)
-            c.send_signal(SIGTERM)
-            a.send_signal(SIGTERM)
+        b.send_signal(SIGTERM)
+        c.send_signal(SIGTERM)
+        a.send_signal(SIGTERM)
 
     def test_sending_to_unknown_host(self):
         metric_addr = 'udp://1asdasjdklasjdasd:8845'

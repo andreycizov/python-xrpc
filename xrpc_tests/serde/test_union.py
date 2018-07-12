@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from xrpc.const import SERVER_SERDE_INST
 from xrpc.serde.abstract import SerdeSet
 from xrpc.serde.error import SerdeException
-from xrpc_tests.impl.test_broker import build_logging
+from xrpc_tests.mp.abstract import ProcessHelper
 
 
 @dataclass
@@ -36,10 +36,9 @@ class C:
 
 class TestWalk(unittest.TestCase):
 
-
     def setUp(self):
-        self.x = build_logging()
-        self.x.__enter__()
+        self.ps = ProcessHelper()
+        self.ps.__enter__()
 
     def test_union(self):
         tp = Optional[Union[A, B]]
@@ -140,9 +139,8 @@ class TestWalk(unittest.TestCase):
 
     def test_union_degraded_versioning_back(self):
         # todo python automatically normalizes Union[A] to A
-        #self._generic(Union[A, B], Union[A], A('asd'))
+        # self._generic(Union[A, B], Union[A], A('asd'))
         pass
-
 
     def test_union_same_name(self):
         with self.subTest('init'):
@@ -150,5 +148,4 @@ class TestWalk(unittest.TestCase):
                 serde = SerdeSet.walk(SERVER_SERDE_INST, Union[_A, A, B]).struct(SERVER_SERDE_INST)
 
     def tearDown(self):
-        self.x.__exit__(*sys.exc_info())
-
+        self.ps.__exit__(*sys.exc_info())
