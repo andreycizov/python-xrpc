@@ -6,6 +6,7 @@ install:
 - pip install -U tox tox-travis codecov
 script: tox
 after_success:
+- tox -e coverage
 - codecov
 deploy:
   provider: pypi
