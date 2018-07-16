@@ -1,3 +1,4 @@
+import logging
 from urllib.parse import urlparse, parse_qs, ParseResult, urlunparse
 
 from dataclasses import dataclass, field
@@ -51,6 +52,7 @@ class ServiceWrapper:
         if f1 or alias:
             return CallWrapper(self, item, alias)
         else:
+            logging.getLogger(__name__).error('%s', self.defn.rpcs)
             raise AttributeError(item)
 
 

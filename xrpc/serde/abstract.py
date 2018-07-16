@@ -19,11 +19,33 @@ DESER = Callable[[Union[list, dict]], Any]
 SER = Callable[[Any], Union[list, dict]]
 
 
+def _repr_typevar(x):
+    if isinstance(x, TypeVar):
+        return f'TypeVar({repr(x)}, {id(x)})'
+    else:
+        return repr(x)
+
+
 @dataclass
 class SerdeStepContext:
     t: Any = None
     mod: ModuleType = None
     generic_vals: Dict[Any, Any] = field(default_factory=dict)
+
+    def __repr__(self):
+
+        def map_repr(x):
+            if isinstance(x, dict):
+                items = ['='.join((_repr_typevar(k), _repr_typevar(v))) for k, v in x.items()]
+                items = ', '.join(items)
+                return f'{{{items}}}'
+            else:
+                return repr(x)
+
+        items = [self.t, self.mod, self.generic_vals]
+        items = [map_repr(x) for x in items if x is not None]
+        items = ', '.join(items)
+        return f'{self.__class__.__qualname__}({items})'
 
     def merge(self, other: 'SerdeStepContext'):
         return SerdeStepContext(other.t, other.mod, {**self.generic_vals, **other.generic_vals})
@@ -40,11 +62,11 @@ class SerdeInst:
     def __init__(self, context: List['SerdeType']):
         self.context = context
 
-    def match(self, t: Any) -> 'SerdeType':
+    def match(self, t: Any, ctx: SerdeStepContext) -> 'SerdeType':
         for x in self.context:
             try:
-                if x.match(t):
-                    logging.getLogger(__name__ + '.match').debug('%s -> %s', t, x)
+                if x.match(t, ctx):
+                    logging.getLogger(__name__ + '.match').debug('%s -> %s %s', t, x, ctx)
                     return x
             except:
                 raise ValueError(f'GivenClass={t.__class__} GivenType={t} Matcher={x}')
@@ -52,16 +74,18 @@ class SerdeInst:
             raise ValueError(f'Could not match `{t}` `{t.__class__}`')
 
     def norm(self, t: Any, ctx: SerdeStepContext) -> Any:
-        return self.match(t).norm(self, t, ctx)
+        r = self.match(t, ctx).norm(self, t, ctx)
+        logging.getLogger(__name__ + '.norm').debug('%s -> %s [%s]', t, r, ctx)
+        return r
 
     def step(self, t: Any, ctx: SerdeStepContext) -> SerdeNode:
-        return self.match(t).step(self, t, ctx)
+        return self.match(t, ctx).step(self, t, ctx)
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
-        return self.match(t).deserializer(t, deps)
+        return self.match(t, SerdeStepContext()).deserializer(t, deps)
 
     def serializer(self, t: Any, deps: List[SER]) -> SER:
-        return self.match(t).serializer(t, deps)
+        return self.match(t, SerdeStepContext()).serializer(t, deps)
 
 
 class SerdeTypeDeserializer:
@@ -102,7 +126,7 @@ class SerdeType:
     cls_serializer: Type[SerdeTypeSerializer] = SerdeTypeSerializer
     cls_deserializer: Type[SerdeTypeDeserializer] = SerdeTypeDeserializer
 
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         pass
 
     def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> Any:
@@ -223,7 +247,6 @@ class SerdeSet:
 
         while len(to_visit):
             x, ctx = to_visit.popleft()
-
             do_visit(x, ctx)
 
         return SerdeSet(list(r.values()))

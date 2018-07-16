@@ -1,5 +1,4 @@
-import unittest
-from typing import NamedTuple, TypeVar, Generic
+from typing import TypeVar, Generic
 
 from dataclasses import dataclass
 
@@ -7,6 +6,7 @@ from xrpc.const import SERVER_SERDE_INST
 from xrpc.serde.abstract import SerdeSet
 from xrpc.serde.error import SerdeException
 from xrpc.serde.types import CallableArgsWrapper, CallableRetWrapper
+from xrpc_tests.mp.abstract import ProcessHelperCase
 
 T = TypeVar('T')
 
@@ -36,7 +36,7 @@ def dir_items(x):
         yield n, getattr(x, n)
 
 
-class TestGeneric(unittest.TestCase):
+class TestGeneric(ProcessHelperCase):
     def test_pickle_0(self):
         WorkerSerde = build_worker_serde()
 

@@ -7,7 +7,6 @@ concurrency = multiprocessing
 [report]
 include =
     xrpc/*
-    xrpc_tests/*
 
 # Regexes for lines to exclude from consideration
 exclude_lines =

@@ -83,7 +83,7 @@ class PopenStack:
             except subprocess.TimeoutExpired:
                 for x in self.stack:
                     x.send_signal(signal.SIGKILL)
-                raise ValueError('Killed all of them!')
+                raise ValueError('We have timed out and therefore killed all of the subprocesses')
 
 
 def popen_main():

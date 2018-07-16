@@ -1,4 +1,5 @@
 import datetime
+import logging
 from typing import NamedTuple, Any, Optional
 
 from xrpc.const import SERVER_SERDE_INST
@@ -23,6 +24,8 @@ class ServiceDefn(NamedTuple):
 
         serde_set: SerdeSet = SerdeSet.walk(SERVER_SERDE_INST, datetime.datetime, ctx)
         serde_set = serde_set.merge(SerdeSet.walk(SERVER_SERDE_INST, Optional[str], ctx))
+
+        logging.getLogger(__name__).debug('Inferred RPCs: %s', rpcs)
 
         for rpc_name, rpc_def in rpcs.items():
             fa = CallableArgsWrapper.from_func_cls(obj, rpc_def.fn, )

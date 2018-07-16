@@ -1,6 +1,7 @@
 import base64
 import datetime
 import inspect
+import logging
 import sys
 import uuid
 from enum import Enum
@@ -34,7 +35,7 @@ else:
 
 
 class ForwardRefSerde(SerdeType):
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         return isinstance(t, FR)
 
     def norm(self, i: SerdeInst, t: FR, ctx: SerdeStepContext):
@@ -113,7 +114,7 @@ class UnionSerde(SerdeType):
         self.descriptor_fn = descriptor_fn
         super().__init__()
 
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         r = is_union(t)
 
         if r:
@@ -168,7 +169,7 @@ class OptionalSerde(SerdeType):
     cls_deserializer = OptionalDeserializer
     cls_serializer = OptionalDeserializer
 
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         r = is_union(t)
 
         if r:
@@ -237,7 +238,7 @@ class AtomSerde(SerdeType):
     cls_deserializer = AtomDeserializer
     cls_serializer = AtomSerializer
 
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         return t in self.ATOMS
 
     def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
@@ -258,7 +259,7 @@ class BytesSerde(SerdeType):
     cls_deserializer = BytesDeserializer
     cls_serializer = BytesSerializer
 
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         if inspect.isclass(t):
             return issubclass(t, bytes)
         else:
@@ -269,7 +270,7 @@ class BytesSerde(SerdeType):
 
 
 class TypeVarSerde(SerdeType):
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         return isinstance(t, TypeVar)
 
     def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> Any:
@@ -283,7 +284,7 @@ class TypeVarSerde(SerdeType):
 
 
 class NoneSerde(SerdeType):
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         if t == type(None):
             return True
         if t is None:
@@ -306,7 +307,7 @@ class NoneSerde(SerdeType):
 
 
 class UUIDSerde(SerdeType):
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         if inspect.isclass(t):
             return issubclass(t, uuid.UUID)
         else:
@@ -323,7 +324,7 @@ ISO8601 = '%Y-%m-%dT%H:%M:%S.%f'
 
 
 class DateTimeSerde(SerdeType):
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         if inspect.isclass(t):
             return issubclass(t, datetime.datetime)
         else:
@@ -355,17 +356,28 @@ class ListSerde(SerdeType):
     cls_deserializer = ListDeserializer
     cls_serializer = ListSerializer
 
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
+        t, _ = _build_generic_context(t, ctx)
+
+        if sys.version_info >= (3, 7):
+            if hasattr(t, '__origin__'):
+                return t.__origin__ is list
+
         if inspect.isclass(t):
             return issubclass(t, List)
         else:
             return False
 
-    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
-        assert hasattr(t, '__args__')
+    def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> Any:
+        _, ctx = _build_generic_context(t, ctx)
         st, = t.__args__
         st = i.norm(st, ctx)
-        return SerdeNode(List[st], [st])
+
+        return List[st]
+
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        t = i.norm(t, ctx)
+        return SerdeNode(t, [t.__args__[0]], ctx=ctx)
 
 
 class TupleDeserializer(ListDeserializer):
@@ -382,8 +394,8 @@ class TupleSerde(SerdeType):
     cls_deserializer = TupleDeserializer
     cls_serializer = TupleSerializer
 
-    def match(self, t: Any) -> bool:
-        t, _ = _build_generic_context(t)
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
+        t, _ = _build_generic_context(t, ctx)
 
         if sys.version_info >= (3, 7):
             if hasattr(t, '__origin__'):
@@ -394,15 +406,19 @@ class TupleSerde(SerdeType):
         else:
             return False
 
+    def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> Any:
+        _, ctx = _build_generic_context(t, ctx)
+        args = tuple(i.norm(st, ctx) for st in t.__args__)
+
+        return Tuple[args]
+
     def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
-        assert hasattr(t, '__args__')
-        st, = t.__args__
-        st = i.norm(st, ctx)
-        return SerdeNode(Tuple[st], [st])
+        t = i.norm(t, ctx)
+        return SerdeNode(t, [x for x in t.__args__], ctx=ctx)
 
 
 class DictSerde(SerdeType):
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         if sys.version_info >= (3, 7):
             is_gen = hasattr(t, '__origin__')
 
@@ -440,7 +456,7 @@ class DictSerde(SerdeType):
 
 
 class EnumSerde(SerdeType):
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         if inspect.isclass(t):
             return issubclass(t, Enum)
         else:
@@ -498,7 +514,7 @@ class NamedTupleSerde(SerdeType):
     cls_deserializer = NamedTupleDeserializer
     cls_serializer = NamedTupleSerializer
 
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         if sys.version_info >= (3, 7):
             is_gen = hasattr(t, '__origin__')
 
@@ -552,40 +568,11 @@ class DataclassSerializer(SerdeTypeDeserializer):
         return NamedTupleSerializer.__call__(self, val)
 
 
-# def build_generic_context(t, ctx):
-#     def mmaps(pars, args):
-#         maps = dict(zip(pars, args))
-#
-#         maps = {k: ctx.generic_vals.get(k, v) if isinstance(v, TypeVar) else v for k, v in maps.items()}
-#
-#         uninst = {k: isinstance(maps[k], TypeVar) for k in maps}
-#
-#         if any(uninst.values()):
-#             raise ValueError(f'Not all generic parameters are instantiated: {uninst}')
-#
-#         return maps
-#
-#     if sys.version_info >= (3, 7):
-#         if not hasattr(t, '__origin__'):
-#             return ctx
-#
-#         maps = mmaps(t.__origin__.__parameters__, t.__args__)
-#
-#         return SerdeStepContext(mod=ctx.mod, generic_vals={**ctx.generic_vals, **maps})
-#     else:
-#         if not hasattr(t, '_gorg'):
-#             return ctx
-#
-#         maps = mmaps(t._gorg.__parameters__, t.__args__)
-#
-#         return SerdeStepContext(mod=ctx.mod, generic_vals={**ctx.generic_vals, **maps})
-
-
 class DataclassSerde(SerdeType):
     cls_deserializer = DataclassDeserializer
     cls_serializer = DataclassSerializer
 
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         if sys.version_info >= (3, 7):
             is_gen = hasattr(t, '__origin__')
 
@@ -593,9 +580,13 @@ class DataclassSerde(SerdeType):
                 t = t.__origin__
         return is_dataclass(t)
 
+    def norm(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> Any:
+        t, ctx = _build_generic_context(t, ctx)
+        return t
+
     def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         # todo: here, we may need to instantiate the generic items
-        ctx = build_generic_context(t, ctx)
+        t, ctx = _build_generic_context(t, ctx)
 
         xt = t
 
@@ -605,7 +596,9 @@ class DataclassSerde(SerdeType):
             if is_gen:
                 xt = t.__origin__
 
-        return SerdeNode(t, [i.norm(f.type, ctx) for f in sorted(fields(xt), key=lambda x: x.name)], ctx)
+        logging.getLogger(__name__ + '.DataclassSerde.step').debug('%s %s', t, ctx)
+
+        return SerdeNode(i.norm(t, ctx), [i.norm(f.type, ctx) for f in sorted(fields(xt), key=lambda x: x.name)], ctx)
 
 
 class CallableArgsWrapper(NamedTuple):
@@ -860,7 +853,7 @@ class CallableArgsSerde(SerdeType):
     # fullargspect -> Type (or a function)
     # args_kwargs -> INPUT
 
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         return isinstance(t, CallableArgsWrapper)
 
     def _build_args(self, t: CallableArgsWrapper):
@@ -1004,7 +997,7 @@ class CallableArgsSerde(SerdeType):
 
 
 class CallableRetSerde(SerdeType):
-    def match(self, t: Any) -> bool:
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
         return isinstance(t, CallableRetWrapper)
 
     def step(self, i: SerdeInst, t: CallableRetWrapper, ctx: SerdeStepContext) -> SerdeNode:

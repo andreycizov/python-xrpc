@@ -1,3 +1,5 @@
+import logging
+import sys
 from inspect import getfullargspec
 from typing import Dict, Any, Tuple, Callable, NamedTuple
 
@@ -9,7 +11,14 @@ from xrpc.generic import build_generic_context
 def build_rpc_list(x, conf_attr_name=ATTR_RPC) -> Tuple[str, Any, Any]:
     x, _ = build_generic_context(x)
 
+    if sys.version_info >= (3, 7):
+        if hasattr(x, '__origin__'):
+            x = x.__origin__
+
     r = []
+
+    logging.getLogger(f'{__name__}.build_rpc_list').debug('%s %s', x, dir(x))
+
     for attr_name in dir(x):
         attr_val = getattr(x, attr_name)
 

@@ -13,4 +13,5 @@ class GenericDC(Generic[T]):
 
 class OrderingTest(unittest.TestCase):
     def test_order(self):
-        pass #sorted([Dict[int, int], List[int], GenericDC[int]])
+        with self.assertRaises(TypeError):
+            sorted([Dict[int, int], List[int], GenericDC[int]])

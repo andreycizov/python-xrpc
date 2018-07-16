@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from xrpc.const import SERVER_SERDE_INST
 from xrpc.serde.abstract import SerdeSet
-from xrpc_tests.serde import test_pickle2
+from xrpc_tests.serde import test_pickle_other_module
 
 
 class Obj(NamedTuple):
@@ -24,7 +24,7 @@ class ObjR2(NamedTuple):
 
 
 class ObjR4(NamedTuple):
-    y: 'test_pickle2.ObjR3'
+    y: 'test_pickle_other_module.ObjR3'
 
 
 T = TypeVar('T')

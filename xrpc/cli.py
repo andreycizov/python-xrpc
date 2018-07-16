@@ -1,8 +1,11 @@
+import inspect
+import sys
 from argparse import ArgumentParser
-from typing import Any, TypeVar, Type, Dict, Tuple, List, Optional
+from typing import Any, TypeVar, Type, Dict, List, Optional
 
-from dataclasses import fields, dataclass, _MISSING_TYPE, MISSING
+from dataclasses import fields, dataclass, MISSING
 
+from xrpc.generic import build_generic_context
 from xrpc.logging import _dict_split_prefix
 from xrpc.serde.types import is_union
 
@@ -14,6 +17,18 @@ class ParsableConf:
     names: List[str]
     type: Optional[Any] = None
     action: Optional[str] = None
+
+
+def is_list(t):
+    t, _ = build_generic_context(t)
+
+    if sys.version_info >= (3, 7):
+        if hasattr(t, '__origin__'):
+            return t.__origin__ is list
+    if inspect.isclass(t):
+        return issubclass(t, List)
+    else:
+        return False
 
 
 def _guess_type_action(dest, type_, default) -> ParsableConf:
@@ -34,7 +49,7 @@ def _guess_type_action(dest, type_, default) -> ParsableConf:
             action = 'store_false'
         else:
             action = 'store_true'
-    elif issubclass(type_, List):
+    elif is_list(type_):
         type_, = type_.__args__
         action = 'append'
     return ParsableConf([dest], type_, action)

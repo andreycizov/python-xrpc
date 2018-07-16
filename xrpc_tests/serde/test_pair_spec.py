@@ -17,7 +17,6 @@ def mutably_defs_unmatched_kwonlyarg(*, d, **kwargs: int):
     pass
 
 
-
 class TestPairSpec(unittest.TestCase):
     def test_pair_spec(self):
         spec = getfullargspec(mutably)

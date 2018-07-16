@@ -10,7 +10,6 @@ from xrpc.serde.types import ForwardRefSerde, UnionSerde, AtomSerde, NoneSerde, 
     EnumSerde, NamedTupleSerde, CallableArgsSerde, CallableArgsWrapper
 
 
-
 class Simple2(NamedTuple):
     y: Optional[str] = 'asd'
 
@@ -28,9 +27,7 @@ class TestWalk(unittest.TestCase):
 
         y = x.struct(i)
 
-
         z = y.deserialize(Simple, {'x': 5, 'z': {'y': 'abc'}})
-
 
     def test_caller(self):
         i = SERVER_SERDE_INST
@@ -55,12 +52,9 @@ class TestWalk(unittest.TestCase):
 
         x = x1.merge(x2)
 
-
         y = x.struct(i)
 
-
         z = y.deserialize(wrapper, [[5, 'asd', {'a': 'a'}, {'b': 'c'}], {'g': 'abc', 'd': 5}])
-
 
         args, kwargs = z
 
@@ -70,9 +64,7 @@ class TestWalk(unittest.TestCase):
 
         z = y.deserialize(wrapper2, [[5, {'x': 5}, 'asd', {'a': 'a'}, {'b': 'c'}], {'g': 'abc', 'd': 5}])
 
-
         zb = y.serialize(wrapper2, z)
-
 
         args, kwargs = z
 
