@@ -79,7 +79,7 @@ class Block:
         checksum_reqd, payload = Checksum.unpack(payload)
 
         payload_size, = BLK_PACKER.unpack(payload[:BLK_PACKER.size])
-        
+
         if len(payload) < payload_size + BLK_PACKER.size:
             raise ChecksumError(None, checksum_reqd)
 
