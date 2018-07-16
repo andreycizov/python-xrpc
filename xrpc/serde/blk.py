@@ -1,17 +1,23 @@
 import hashlib
 import struct
 from enum import Enum
-from typing import NamedTuple, Tuple, List
+from typing import NamedTuple, Tuple, List, Optional
+
+from dataclasses import dataclass
 
 
 class ChecksumType(Enum):
     sha256 = 0
 
+    def __repr__(self):
+        return self.__class__.__name__ + '.' + self.name
+
 
 CS_PACKER = struct.Struct('!B')
 
 
-class Checksum(NamedTuple):
+@dataclass
+class Checksum:
     type: ChecksumType
     payload: bytes
 
@@ -23,7 +29,7 @@ class Checksum(NamedTuple):
         if t == ChecksumType.sha256:
             ln = 256 // 8
             return Checksum(t, payload[CS_PACKER.size:CS_PACKER.size + ln]), payload[CS_PACKER.size + ln:]
-        else:
+        else:  # pragma: no cover
             assert False, t
 
     def pack(self) -> bytes:
@@ -35,11 +41,8 @@ class Checksum(NamedTuple):
             m = hashlib.sha256()
             m.update(payload)
             return Checksum(type, m.digest())
-        else:
+        else:  # pragma: no cover
             assert False, type
-
-
-BLK_PACKER = struct.Struct('!L')
 
 
 class BlockError(Exception):
@@ -47,7 +50,7 @@ class BlockError(Exception):
 
 
 class ChecksumError(BlockError):
-    def __init__(self, curr: Checksum, reqd: Checksum):
+    def __init__(self, curr: Optional[Checksum], reqd: Checksum):
         self.curr = curr
         self.reqd = reqd
 
@@ -59,7 +62,11 @@ class ChecksumError(BlockError):
 
 # todo: we must be able to chain blocks.
 
-class Block(NamedTuple):
+BLK_PACKER = struct.Struct('!L')
+
+
+@dataclass
+class Block:
     checksum: Checksum
     payload: bytes
 
@@ -72,6 +79,9 @@ class Block(NamedTuple):
         checksum_reqd, payload = Checksum.unpack(payload)
 
         payload_size, = BLK_PACKER.unpack(payload[:BLK_PACKER.size])
+        
+        if len(payload) < payload_size + BLK_PACKER.size:
+            raise ChecksumError(None, checksum_reqd)
 
         payload_bytes = payload[BLK_PACKER.size:BLK_PACKER.size + payload_size]
 

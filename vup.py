@@ -52,7 +52,7 @@ def repo_diff_check():
 
     x = hcomm.diff(None)
 
-    assert not len(x), ('None of the ', len(x))
+    assert not len(x), ('Must not have unstaged files', len(x))
 
 
 def repo_add(new_version, FILENAME='setup.py', ):
