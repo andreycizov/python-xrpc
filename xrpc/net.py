@@ -69,7 +69,7 @@ class RPCKey:
         return timestamp + uuid
 
     def pack_str(self) -> str:
-        return base64.b32encode(self.pack()).decode()
+        return base64.b64encode(self.pack(), altchars=b'_-').decode()
 
     @classmethod
     def unpack(cls, body: bytes):
@@ -80,6 +80,11 @@ class RPCKey:
 
     def __repr__(self):
         return f'{self.__class__.__name__}({self.timestamp:{ISO8601}} {self.uuid.hex})'
+
+
+class UUKey(RPCKey):
+    def __repr__(self):
+        return f'{self.__class__.__name__}({self.pack_str()})'
 
 
 class RPCReply(Enum):
