@@ -42,7 +42,7 @@ def repo_tags_check(old_version, new_version):
     repo = Repo()
 
     names = set(x.name for x in repo.tags)
-    assert 'v' + old_version in names
+    assert 'v' + old_version in names or True
     assert 'v' + new_version not in names
 
 
@@ -52,7 +52,7 @@ def repo_diff_check():
 
     x = hcomm.diff(None)
 
-    assert not len(x), len(x)
+    assert not len(x), ('None of the ', len(x))
 
 
 def repo_add(new_version, FILENAME='setup.py', ):
@@ -65,8 +65,8 @@ def repo_add(new_version, FILENAME='setup.py', ):
 
     diff_file = diff[0]
 
-    print(diff_file.diff.decode())
-    print(diff_file.score)
+    #print(diff_file.diff.decode())
+    #print(diff_file.score)
 
     assert diff_file.a_path == FILENAME, diff_file.a_path
     assert diff_file.b_path == FILENAME, diff_file.b_path
@@ -90,6 +90,10 @@ def main(old_version, new_version):
     fix_version(curr_old_version_span, new_version)
 
     repo_add(new_version)
+
+    print(f'git push origin v{new_version}')
+
+    Repo().git.push('origin', f'v{new_version}')
 
 
 main(sys.argv[1], sys.argv[2])
