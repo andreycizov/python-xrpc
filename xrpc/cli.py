@@ -3,7 +3,7 @@ import sys
 from argparse import ArgumentParser
 from typing import Any, TypeVar, Type, Dict, List, Optional
 
-from dataclasses import fields, dataclass, MISSING
+from dataclasses import fields, dataclass, MISSING, _MISSING_TYPE
 
 from xrpc.generic import build_generic_context
 from xrpc.logging import _dict_split_prefix
@@ -70,10 +70,16 @@ class Parsable:
             else:
                 default = f.default
 
+                assert default is not MISSING, f
+
             type_ = f.type
 
             name = f'{f.name}'
-            dest = f'{prefix}_{name}'
+
+            if prefix:
+                dest = f'{prefix}_{name}'
+            else:
+                dest = name
 
             if name in overrides:
                 conf = overrides[name]
@@ -102,9 +108,15 @@ class Parsable:
 
     @classmethod
     def from_parser(cls: Type[T], prefix, d, forget_other=True) -> T:
-        a, b = _dict_split_prefix(d, prefix + '_')
+        filtered_fields, unfiltered_fields = _dict_split_prefix(d, prefix + '_' if prefix else '')
+
+        field_set = {x.name for x in fields(cls)}
+
+        filtered_fields = {k: v for k, v in filtered_fields.items() if k in field_set}
+        unfiltered_fields = {k: v for k, v in filtered_fields.items() if k not in field_set}
+        unfiltered_fields = {**unfiltered_fields, **unfiltered_fields}
 
         if forget_other:
-            return cls(**a)
+            return cls(**filtered_fields)
         else:
-            return b, cls(**a)
+            return unfiltered_fields, cls(**filtered_fields)
