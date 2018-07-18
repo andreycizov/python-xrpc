@@ -54,6 +54,8 @@ def popen(fn, *args, **kwargs) -> subprocess.Popen:
         )),
     ]
 
+    logging.getLogger(__name__).debug('Start %s', args)
+
     p = subprocess.Popen(args)
     return p
 
