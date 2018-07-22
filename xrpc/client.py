@@ -5,12 +5,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, NamedTuple
 
-from xrpc.net import RPCKey, RPCPacket, RPCReply, RPCPacketType, time_unpack
 from xrpc.dsl import RPCType
+from xrpc.error import TimeoutError, InvalidFingerprintError, HorizonPassedError, InternalError
+from xrpc.net import RPCKey, RPCPacket, RPCReply, RPCPacketType
 from xrpc.service import ServiceDefn
 from xrpc.transport import Origin, RPCTransportStack, RPCPacketRaw, select_helper
-from xrpc.error import TimeoutError, InvalidFingerprintError, HorizonPassedError, InternalError
-
 from xrpc.util import time_now
 
 
@@ -25,7 +24,7 @@ def dest_overrides(url):
     r: ParseResult = urlparse(url)
     qs = parse_qs(r.query) if r.query else {}
     r = r._replace(query=None)
-    r = urlunparse(r)
+    r: str = urlunparse(r)
 
     return {k: v[0] for k, v in qs.items()}, r
 
