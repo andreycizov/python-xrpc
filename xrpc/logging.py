@@ -1,14 +1,13 @@
-import argparse
 import logging
-
 import sys
-import threading
 from contextlib import contextmanager
-from typing import NamedTuple, List, Union, Optional, Dict, Callable, TypeVar, Tuple
 from urllib.parse import urlparse, ParseResult, parse_qs
 
+import argparse
+import threading
 from dataclasses import dataclass
 from pygelf import GelfUdpHandler
+from typing import NamedTuple, List, Union, Optional, Dict, Callable, TypeVar, Tuple
 
 
 class LoggerLevel(NamedTuple):
@@ -292,14 +291,14 @@ def _dict_split_prefix(dict: Dict[str, T], prefix: str) -> Tuple[Dict[str, T], D
 
 
 @contextmanager
-def circuitbreaker():
+def circuitbreaker(main_logger='main'):
     try:
         yield
     except SystemExit as e:
         # do not spam the console if ``exit`` is called
         exit(e.code)
     except:
-        logging.getLogger('main').exception('Main routine caused an exception')
+        logging.getLogger(main_logger).exception('Main routine caused an exception')
         exit(-1)
 
 
