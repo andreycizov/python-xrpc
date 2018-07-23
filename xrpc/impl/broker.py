@@ -1,34 +1,32 @@
 import json
 import logging
 import os
-import types
+import tempfile
+from collections import deque
 from inspect import getfullargspec, ismethod
-from subprocess import TimeoutExpired
 
 import shutil
 import socket
-import tempfile
-from signal import SIGTERM
-from argparse import ArgumentParser
-from collections import deque
+import types
+from dataclasses import dataclass
 from datetime import datetime
 from itertools import count
+from signal import SIGTERM
+from subprocess import TimeoutExpired
 from time import sleep
 from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple, Union
 
-from dataclasses import dataclass
-
-from xrpc.cli import Parsable
-from xrpc.logging import logging_config, LoggerSetup, logging_setup, circuitbreaker
-from xrpc.popen import popen
 from xrpc.abstract import MutableInt
+from xrpc.cli import Parsable
 from xrpc.client import ClientConfig
 from xrpc.const import SERVER_SERDE_INST
 from xrpc.dsl import rpc, RPCType, regular, socketio, signal
 from xrpc.error import HorizonPassedError, TimeoutError, TerminationException
+from xrpc.logging import logging_config, LoggerSetup, logging_setup, circuitbreaker
+from xrpc.popen import popen
 from xrpc.runtime import service, sender
 from xrpc.serde.abstract import SerdeSet, SerdeStruct
-from xrpc.serde.types import pair_spec, build_types, ARGS_RET, PairSpec
+from xrpc.serde.types import build_types, ARGS_RET, PairSpec
 from xrpc.transport import recvfrom_helper, Packet, Origin
 from xrpc.util import time_now, signal_context
 
@@ -38,7 +36,6 @@ class BrokerConf(Parsable):
     heartbeat: float = 5.
     max_pings: int = 5
     metrics: float = 10.
-
 
 
 @dataclass
@@ -85,7 +82,7 @@ def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, path: str):
         logging.getLogger(__name__).error(f'Received {code}')
         raise KeyboardInterrupt('')
 
-    with logging_setup(logger_config), circuitbreaker(), signal_context(handler=sig_handler):
+    with logging_setup(logger_config), circuitbreaker(main_logger='broker'), signal_context(handler=sig_handler):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # UDP
 
         logging.getLogger('worker_inst').debug('Binding to %s', path)
