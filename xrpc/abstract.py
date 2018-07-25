@@ -1,5 +1,6 @@
 import heapq
 from collections import deque
+
 from datetime import datetime
 from typing import TypeVar, Generic, List, Optional, Deque
 
@@ -56,6 +57,12 @@ H = TypeVar('H')
 class Queue(Generic[T, H]):
     def __init__(self, initial: Optional[List[T]] = None):
         self.h: H = self._init(initial)
+
+    def copy(self) -> 'Queue':
+        return self.__class__(self.h)
+
+    def __len__(self):
+        return len(self.h)
 
     def _init(self, initial: List[T]) -> H:
         raise NotImplementedError()
