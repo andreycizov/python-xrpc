@@ -1,8 +1,8 @@
 import argparse
 
-from xrpc.logging import logging_parser, cli_main
-from xrpc.server import run_server
+from xrpc.actor import run_server
 from xrpc.examples.exemplary_rpc import ExemplaryRPC
+from xrpc.logging import logging_parser, cli_main
 
 
 def main(bind, **kwargs):

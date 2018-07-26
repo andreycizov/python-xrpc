@@ -1,16 +1,16 @@
 import logging
 import sys
 from collections import deque
+
 from types import ModuleType
 
 from xrpc.serde.error import SerdeException
 
 if sys.version_info >= (3, 7):
-    from typing import NamedTuple, Any, List, ForwardRef, _type_check, Optional, Union, Dict, Callable, \
-        _tp_cache, TypeVar, Type, Tuple, Deque, Set
+    from typing import NamedTuple, Any, List, Optional, Union, Dict, Callable, \
+        TypeVar, Type, Tuple, Deque, Set
 else:
-    from typing import Any, _ForwardRef, _FinalTypingBase, Optional, Union, List, Dict, _tp_cache, _type_check, \
-        Callable, \
+    from typing import Any, Optional, Union, List, Dict, Callable, \
         NamedTuple, Tuple, TypeVar, Type
 
 from dataclasses import dataclass, field
@@ -152,7 +152,7 @@ class SerdeStruct(NamedTuple):
     deserializers: Dict[Any, DESER]
     serializers: Dict[Any, SER]
 
-    def deserialize(self, t: Type[T], val) -> T:
+    def deserialize(self, t: Any, val) -> T:
         try:
             return self.deserializers[t](val)
         except Exception as e:
@@ -171,6 +171,9 @@ class SerdeSet:
 
     def __iter__(self):
         return iter(self.items)
+
+    def __or__(self, other):
+        return self.merge(other)
 
     def merge(self, *xs: 'SerdeSet') -> 'SerdeSet':
         r: List[SerdeNode] = []

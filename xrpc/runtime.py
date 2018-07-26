@@ -1,80 +1,170 @@
-import logging
+from urllib.parse import urlparse, ParseResult, urlunparse, urlencode, parse_qsl
+
 import threading
-from typing import Optional, NamedTuple, Callable, Dict, TypeVar, Type, Any
+from dataclasses import dataclass
+from typing import Optional, Callable, Dict, TypeVar, Type, Any, List
 
 from xrpc.client import ClientConfig, ServiceWrapper
-from xrpc.net import RPCKey
+from xrpc.loop import EventLoop
 from xrpc.service import ServiceDefn
-from xrpc.transport import Origin, RPCTransportStack
+from xrpc.trace import log_tr_exec_in, log_tr_exec_out
+from xrpc.transport import Origin
 
 RUNTIME_TL = threading.local()
 CTX_NAME = 'rpc_config'
 CACHE_NAME = 'rpc_cache'
 
 
-class ExecutionContext(NamedTuple):
-    transport_stack: RPCTransportStack
+@dataclass
+class ExecutionContext:
+    actor: 'Actor'
+    el: EventLoop
+    chans: Dict[str, int]
+    """Channels of `el` available in this context by these names"""
+    chan_def: Optional[str] = None
+    """Default channel to send messages from (as the client)"""
+
     origin: Optional[Origin] = None
-    key: Optional[RPCKey] = None
-    ret: Optional[Callable[[Any], None]] = None
+    reply: Optional[Callable[[Any], None]] = None
 
     def exec(self, __origin, __fn: Callable, *args, **kwargs):
         is_ok = False
         r = None
 
-        logging.getLogger(f'xrpc.trace.e.{__origin}').debug('Name=%s %s %s %s %s', __fn.__name__, is_ok, args, kwargs, r)
-        try:
-            context_set(self)
+        idx = context_push(self)
 
+        log_tr_exec_in.debug('[%s %s] Name=%s %s %s %s %s', idx, __origin, __fn, is_ok, args, kwargs, r)
+
+        try:
             r = __fn(*args, **kwargs)
             is_ok = True
             return r
         finally:
-            logging.getLogger(f'xrpc.trace.x.{__origin}').debug('Name=%s %s %s %s %s', __fn.__name__, is_ok, args, kwargs, r)
-            context_set(None)
+            log_tr_exec_out.debug('[%s %s] Name=%s %s %s %s %s', idx, __origin, __fn, is_ok, args, kwargs, r)
+            context_pop(idx)
 
 
-def context_set(config: Optional[ExecutionContext]):
-    if sender:
-        setattr(RUNTIME_TL, CTX_NAME, config)
-    elif hasattr(RUNTIME_TL, CTX_NAME):
-        delattr(RUNTIME_TL, CTX_NAME)
+def context_push(config: Optional[ExecutionContext]):
+    if not hasattr(RUNTIME_TL, CTX_NAME):
+        setattr(RUNTIME_TL, CTX_NAME, [])
+
+    ctx = getattr(RUNTIME_TL, CTX_NAME)
+    ctx.append(config)
+
+    return len(ctx) - 1
 
 
-def cache_get() -> Dict[Type, ServiceDefn]:
-    if not hasattr(RUNTIME_TL, CACHE_NAME):
-        nd = {}
-        setattr(RUNTIME_TL, CACHE_NAME, nd)
+def context_pop(idx: int):
+    ctx = getattr(RUNTIME_TL, CTX_NAME)
 
-    return getattr(RUNTIME_TL, CACHE_NAME)
+    # this is required for calls that have returned early, but since have started processing an another executable
+    new_ctx = ctx[:idx] + ctx[idx + 1:]
+
+    setattr(RUNTIME_TL, CTX_NAME, new_ctx)
 
 
 def context() -> ExecutionContext:
-    return getattr(RUNTIME_TL, CTX_NAME)
+    return getattr(RUNTIME_TL, CTX_NAME)[-1]
 
 
-def sender() -> Origin:
-    return context().origin
-
-
-def reply(ret: Any):
-    ctx = context()
-
-    ctx.ret(ret)
+def context_raw() -> Optional[List[ExecutionContext]]:
+    try:
+        return getattr(RUNTIME_TL, CTX_NAME)
+    except AttributeError:
+        return None
 
 
 T = TypeVar('T')
 
 
-def service(obj: Type[T], addr: Origin, conf: ClientConfig = ClientConfig()) -> T:
+def cache_get(obj: Type[T]) -> ServiceDefn:
+    if not hasattr(RUNTIME_TL, CACHE_NAME):
+        nd = {}
+        setattr(RUNTIME_TL, CACHE_NAME, nd)
+
+    cache = getattr(RUNTIME_TL, CACHE_NAME)
+
+    if obj not in cache:
+        cache[obj] = ServiceDefn.from_cls(obj)
+
+    return cache[obj]
+
+
+def origin() -> Origin:
+    ctx = context()
+    return ctx.el.transport(ctx.chans[ctx.chan_def]).origin
+
+
+def sender() -> Origin:
+    origin = context().origin
+    assert origin is not None, 'sender() can only be called in RPC functions'
+
+    return origin
+
+
+def reply(ret: Any):
+    reply = context().reply
+    assert reply is not None, 'reply() can only be called in RPC functions'
+
+    reply(ret)
+
+
+TA = TypeVar('TA')
+TB = TypeVar('TB')
+
+
+def _masquerade(origin: str, orig: ServiceDefn, new: ServiceDefn, **map: str) -> str:
+    """build an origin URL such that the orig has all of the mappings to new defined by map"""
+    # todo if origin contains maqueraded, masquerade the masqueraded
+
+    origin: ParseResult = urlparse(origin)
+
+    prev_maps = {}
+
+    if origin.query:
+        prev_maps = {k: v for k, v in parse_qsl(origin.query)}
+
+    r_args = {}
+
+    for new_k, orig_k in map.items():
+
+        assert new_k in new.rpcs, [new_k, new.rpcs]
+        assert orig_k in orig.rpcs, [orig_k, orig.rpcs]
+
+        # todo: check if the definitions are the same
+
+        new_v = new.rpcs[new_k]
+        orig_v = orig.rpcs[orig_k]
+
+        if orig_k in prev_maps:
+            orig_k = prev_maps[orig_k]
+
+        assert new_v.res == orig_v.res, [new_v.res, orig_v.res]
+        assert new_v.req == orig_v.req, [new_v.req, orig_v.req]
+
+        r_args[new_k] = orig_k
+
+    return urlunparse(origin._replace(query=urlencode(r_args)))
+
+
+def masquerade(origin: str, orig: Type[TA], new: Type[TB], **map: str) -> str:
+    """Make ``orig`` appear as new"""
+
+    return _masquerade(origin, cache_get(orig), cache_get(new), **map)
+
+
+def service(obj: Type[T], dest: Origin, conf: ClientConfig = ClientConfig(), group=None) -> T:
     ctx = context()
 
-    service_cache = cache_get()
+    defn = cache_get(obj)
 
-    if obj in service_cache:
-        defn = service_cache[obj]
+    group = ctx.chan_def if group is None else group
+
+    assert group is not None, 'service() can only be called within execution context that references channels'
+
+    try:
+        chan_idx = ctx.chans[group]
+    except KeyError:
+        raise ValueError(f'{group} not found in {ctx.chans.keys()}')
     else:
-        defn = ServiceDefn.from_obj(obj)
-        service_cache[obj] = defn
-
-    return ServiceWrapper(defn, conf, ctx.transport_stack, addr)
+        return ServiceWrapper(defn, conf, ctx.el.transport(chan_idx), dest)

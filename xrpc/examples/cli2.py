@@ -1,9 +1,10 @@
-import argparse
 from multiprocessing import Pool
 
-from xrpc.logging import logging_parser, cli_main
-from xrpc.server import run_server
+import argparse
+
+from xrpc.actor import run_server
 from xrpc.examples.exemplary_rpc import BroadcastClientRPC, BroadcastRPC
+from xrpc.logging import logging_parser, cli_main
 
 
 def run_server_a(b_addr):

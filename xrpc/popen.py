@@ -2,13 +2,12 @@ import base64
 import logging
 import os
 import pickle
+import sys
 import zlib
 from contextlib import ExitStack, contextmanager
 
 import signal
-
 import subprocess
-import sys
 from typing import NamedTuple, Callable, Any, Tuple, Dict, List
 
 from xrpc.util import signal_context
@@ -77,11 +76,14 @@ class PopenStack:
         logging.getLogger(__name__).debug('Exit %s %s %s', exc_type, exc_val, exc_tb)
         if exc_type:
             for x in self.stack:
-                x.kill()
+                x.send_signal(signal.SIGKILL)
+
+            raise ValueError('We have excepted out and therefore killed all of the subprocesses')
         else:
             try:
                 for x in self.stack:
-                    x.wait(timeout=self.timeout)
+                    code = x.wait(timeout=self.timeout)
+                    assert code == 0, code
             except subprocess.TimeoutExpired:
                 for x in self.stack:
                     x.send_signal(signal.SIGKILL)

@@ -1,24 +1,29 @@
 import logging
 import multiprocessing
-import subprocess
 import sys
 import unittest
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
+
+import subprocess
+from dataclasses import field, dataclass
 from datetime import timedelta, datetime
+from itertools import count
 from time import sleep
 from typing import Optional
 
-from dataclasses import field, dataclass
-
+from xrpc.actor import run_server
 from xrpc.logging import LoggerSetup, LL, logging_setup
 from xrpc.popen import PopenStack, cov, popen
-from xrpc.server import run_server
 from xrpc.util import time_now
 
 
 def helper_main(ls, fn, *args, **kwargs):
     with logging_setup(ls), cov():
-        fn(*args, **kwargs)
+        try:
+            fn(*args, **kwargs)
+        except:
+            logging.getLogger(__name__).exception('From %s %s %s', fn, args, kwargs)
+            raise
 
 
 def server_main(factory_fn, addr, *args, **kwargs):
@@ -27,10 +32,8 @@ def server_main(factory_fn, addr, *args, **kwargs):
         tp, rpc = factory_fn(addr, *args, **kwargs)
 
         run_server(tp, rpc, [addr])
-    except KeyboardInterrupt:
-        return
     except:
-        logging.exception('')
+        logging.getLogger(__name__ + '.server_main').exception('Exited with: %s %s %s %s', factory_fn, addr, args, kwargs)
         raise
 
 
@@ -51,7 +54,7 @@ def wait_items(waiting, max_wait=40):
                 pass
         for x in to_remove:
             waiting.remove(x)
-        sleep(1)
+        sleep(0.03)
 
     if len(waiting) and wait_till > time_now():
         raise TimeoutError(f'{waiting}')
@@ -113,10 +116,17 @@ class ProcessHelper:
 
 
 class ProcessHelperCase(unittest.TestCase):
+    def _get_ls(self) -> LoggerSetup:
+        return LoggerSetup(LL(None, logging.DEBUG), [], ['stream:///stderr'])
+
+    def step(self):
+        logging.getLogger(self.__class__.__name__).warning(f'[{next(self.steps)}]')
+
     def make_ph(self):
-        return ProcessHelper()
+        return ProcessHelper(self._get_ls())
 
     def setUp(self):
+        self.steps = count()
         self.ps = self.make_ph().__enter__()
 
     def tearDown(self):

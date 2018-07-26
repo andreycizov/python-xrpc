@@ -1,14 +1,10 @@
 import unittest
+
 from datetime import timedelta
 
-from xrpc import error
-from xrpc.client import build_wrapper, ClientConfig
 from xrpc.dict import RPCLogDict, ObjectDict
 from xrpc.error import HorizonPassedError
 from xrpc.net import RPCKey
-from xrpc.service import ServiceDefn
-from xrpc.examples.exemplary_rpc import ExemplaryRPC
-from xrpc.transport import Transport, RPCTransportStack
 from xrpc.util import time_now
 
 

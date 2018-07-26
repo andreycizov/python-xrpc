@@ -1,33 +1,36 @@
-import json
+import logging
 import logging
 import os
 import tempfile
 from collections import deque
+from contextlib import ExitStack
 from inspect import getfullargspec, ismethod
 
 import shutil
-import socket
 import types
+from argparse import ArgumentParser
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import count
 from signal import SIGTERM
-from subprocess import TimeoutExpired
-from time import sleep
+from subprocess import TimeoutExpired, Popen
 from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple, Union
 
 from xrpc.abstract import MutableInt
 from xrpc.cli import Parsable
-from xrpc.client import ClientConfig
+from xrpc.client import ClientConfig, build_wrapper
 from xrpc.const import SERVER_SERDE_INST
 from xrpc.dsl import rpc, RPCType, regular, socketio, signal
 from xrpc.error import HorizonPassedError, TimeoutError, TerminationException
-from xrpc.logging import logging_config, LoggerSetup, logging_setup, circuitbreaker
+from xrpc.logging import logging_config, LoggerSetup, logging_setup, circuitbreaker, cli_main, logging_parser
+from xrpc.loop import EventLoop
 from xrpc.popen import popen
 from xrpc.runtime import service, sender
 from xrpc.serde.abstract import SerdeSet, SerdeStruct
 from xrpc.serde.types import build_types, ARGS_RET, PairSpec
-from xrpc.transport import recvfrom_helper, Packet, Origin
+from xrpc.service import ServiceDefn
+from xrpc.transport import Origin, Transport, select_helper, \
+    TransportSerde
 from xrpc.util import time_now, signal_context
 
 
@@ -39,8 +42,16 @@ class BrokerConf(Parsable):
 
 
 @dataclass
+class WorkerConf(Parsable):
+    processes: int = 1
+    threads: int = 1
+
+
+@dataclass
 class WorkerMetric:
     running_since: Optional[datetime]
+    payload_str: Optional[str]
+    broker_url: str
 
 
 @dataclass
@@ -77,52 +88,77 @@ def get_func_types(fn: WorkerCallable) -> Tuple[Type[RequestType], Type[Response
     return annot[arg.name], annot[ARGS_RET]
 
 
-def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, path: str):
+WPT = TypeVar('WorkerPacketType')
+
+
+@dataclass
+class WorkerEnvelope(Generic[WPT]):
+    payload: Optional[WPT] = None
+    has_payload: bool = False
+
+
+def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, unix_url: str):
     def sig_handler(code, frame):
-        logging.getLogger(__name__).error(f'Received {code}')
+        logging.getLogger('worker_inst').error(f'Received {code}')
         raise KeyboardInterrupt('')
 
-    with logging_setup(logger_config), circuitbreaker(main_logger='broker'), signal_context(handler=sig_handler):
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # UDP
+    with ExitStack() as es:
+        stacks = [
+            logging_setup(logger_config),
+            circuitbreaker(main_logger='broker'),
+            signal_context(handler=sig_handler),
+        ]
 
-        logging.getLogger('worker_inst').debug('Binding to %s', path)
-        sock.bind(path)
-        sock.listen(1)
+        for stack in stacks:
+            es.enter_context(stack)
 
-        connection, origin = sock.accept()
-        logging.getLogger('worker_inst.accept').debug('%s', origin)
+        transport = Transport.from_url(unix_url)
+
+        logging.getLogger('worker_inst').error(f'Start %s', unix_url)
 
         # use the callable's type hints in order to serialize and deserialize parameters
 
         cls_req, cls_res = get_func_types(fn)
 
+        cls_req, cls_res = WorkerEnvelope[cls_req], WorkerEnvelope[cls_res]
+
         serde = build_serde(cls_req, cls_res)
 
+        channel = TransportSerde(transport, serde, cls_res, cls_req)
+
+        channel.send(unix_url, WorkerEnvelope())
+
         try:
-            for x in recvfrom_helper(connection, logger_name='worker_inst.net.trace.raw'):
-                logging.getLogger('worker_inst.net.trace.raw.i').debug('[%d] %s %s', len(x.data), x.addr,
-                                                                       x.data)
-                jp: cls_req = serde.deserialize(cls_req, json.loads(x.data))
+            while True:
+                flags = select_helper(channel.fds)
 
-                ret = fn(jp)
+                for _, x in channel.read():
+                    if x.has_payload:
+                        ret = fn(x.payload)
 
-                op = Packet(None, json.dumps(serde.serialize(cls_res, ret)).encode())
-
-                logging.getLogger('worker_inst.net.trace.raw.o').debug('[%d] %s %s', len(op.data), op.addr,
-                                                                       op.data)
-
-                connection.send(op.pack())
+                        channel.send(unix_url, WorkerEnvelope(ret, True))
+                    else:
+                        logging.getLogger('worker_inst').error('Unhandled %s', x)
         except KeyboardInterrupt:
             logging.getLogger('worker_inst').debug('Mildly inconvenient exit')
+        except ConnectionAbortedError:
+            logging.getLogger('worker_inst').debug('Connection aborted')
         finally:
-            sock.close()
+            logging.getLogger('worker_inst').debug('Exit')
 
 
-def build_serde(req: Type[ResponseType], res: Type[ResponseType]) -> SerdeStruct:
-    a = SerdeSet.walk(SERVER_SERDE_INST, req)
-    b = SerdeSet.walk(SERVER_SERDE_INST, res)
+def build_serde(*items) -> SerdeStruct:
+    ss = None
 
-    return a.merge(b).struct(SERVER_SERDE_INST)
+    for item in items:
+        ssi = SerdeSet.walk(SERVER_SERDE_INST, item)
+
+        if ss is None:
+            ss = ssi
+        else:
+            ss = ss.merge(ssi)
+
+    return ss.struct(SERVER_SERDE_INST)
 
 
 class Worker(Generic[RequestType, ResponseType]):
@@ -137,37 +173,55 @@ class Worker(Generic[RequestType, ResponseType]):
         self.cls_req = cls_req
         self.cls_res = cls_res
 
-        self.serde = build_serde(self.cls_req, self.cls_res)
+        self.cls_backend_req = WorkerEnvelope[cls_req]
+        self.cls_backend_res = WorkerEnvelope[cls_res]
+
+        self.serde = build_serde(self.cls_req, self.cls_res, self.cls_backend_req, self.cls_backend_res)
 
         self.conf = conf
         self.broker_addr = broker_addr
         self.url_metrics = url_metrics
+
+        # todo: we've got a set of jobs assigned by the broker
+        # todo: each job is assigned to a different process and a thread
         self.assigned: Optional[RequestType] = None
         self.running_since: Optional[datetime] = None
+
+        self.fn = fn
 
         self.dir = None
         self.dir = tempfile.mkdtemp()
 
-        unix_url = os.path.join(self.dir, 'unix.sock')
-        self.unix_url = unix_url
+        self.unix_url = 'unix://' + os.path.join(self.dir, 'unix.sock')
 
-        self.inst = popen(worker_inst, logging_config(), fn, unix_url)
+        self.transport = Transport.from_url(self.unix_url + '#bind')
+        self.channel = TransportSerde(self.transport, self.serde, self.cls_backend_req, self.cls_backend_res)
 
-        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.socket.settimeout(1)
-        self.socket.setblocking(0)
+        self.inst, self.inst_addr = self.start_worker_inst()
 
-        sleep(0.3)
+    def restart_worker_inst(self):
+        self.inst.kill()
+
+        self.inst, self.inst_addr = self.start_worker_inst()
+
+    def start_worker_inst(self) -> Tuple[Popen, Origin]:
+        r = popen(worker_inst, logging_config(), self.fn, self.unix_url)
 
         for attempt in count():
-            try:
-                self.socket.connect(unix_url)
-                break
-            except:
-                if attempt >= 5:
-                    raise ValueError('Could not instantiate a worker')
-                logging.exception('At %d', attempt)
-                sleep(1)
+            flags = select_helper(self.channel.fds, 0.5)
+
+            if any(flags):
+                try:
+                    for addr, x in self.channel.read():
+                        assert x.payload is None
+                        return r, addr
+                except ConnectionAbortedError:
+                    pass
+
+            logging.getLogger('main').error('[%s] Could not establish a connection yet', attempt)
+            if attempt >= 5:
+                r.kill()
+                raise ValueError('Could not instantiate a worker')
 
     @rpc()
     def get_assigned(self) -> Optional[ResponseType]:
@@ -176,13 +230,11 @@ class Worker(Generic[RequestType, ResponseType]):
     @rpc(RPCType.Durable)
     def assign(self, pars: RequestType):
         if self.assigned is not None and pars != self.assigned:
-            raise ValueError('Double assignment')
+            self.resign()
+            return
 
-        op = Packet(self.unix_url, json.dumps(self.serde.serialize(self.cls_req, pars)).encode())
+        self.channel.send(self.inst_addr, WorkerEnvelope(pars, has_payload=True))
 
-        logging.getLogger('net.trace.raw.o').debug('[%d] %s %s', len(op.data), op.addr, op.data)
-
-        self.socket.send(op.pack())
         self.assigned = pars
 
         self.running_since = time_now()
@@ -190,6 +242,13 @@ class Worker(Generic[RequestType, ResponseType]):
     @rpc(RPCType.Repliable)
     def pid(self) -> int:
         return int(self.inst.pid)
+
+    @rpc(RPCType.Durable)
+    def resign(self):
+        self.restart_worker_inst()
+
+        s = service(Broker[self.cls_req, self.cls_res], self.broker_addr)
+        s.resign()
 
     def is_killed(self) -> bool:
         try:
@@ -201,6 +260,7 @@ class Worker(Generic[RequestType, ResponseType]):
 
     def possibly_killed(self, definitely=False):
         if definitely or self.is_killed():
+            logging.getLogger('main').exception('Killed %s %s', definitely, self.is_killed())
             self.exit()
             raise TerminationException()
 
@@ -214,36 +274,37 @@ class Worker(Generic[RequestType, ResponseType]):
         return self.conf.heartbeat
 
     @socketio()
-    def bg(self):
+    def bg(self, flags):
         try:
-            for x in recvfrom_helper(self.socket):
-                logging.getLogger('net.trace.raw.i').debug('[%d] %s %s', len(x.data), x.addr, x.data)
+            for _, x in self.channel.read(flags):
+                if x.has_payload:
+                    logging.getLogger('main').error('Done %s', x.payload)
+                    self.assigned = None
+                    self.running_since = None
 
-                ret = self.serde.deserialize(self.cls_res, json.loads(x.data))
+                    ret = x.payload
 
-                logging.getLogger('bg').debug('Returned %s', x)
+                    s = service(Broker[self.cls_req, self.cls_res], self.broker_addr)
 
-                self.assigned = None
-
-                s = service(Broker[self.cls_req, self.cls_res], self.broker_addr)
-
-                try:
-                    s.done(ret)
-                except HorizonPassedError:
-                    logging.getLogger('bg').exception('Seems like the broker had been killed while I was working')
-
-                self.running_since = None
+                    try:
+                        s.done(ret)
+                    except HorizonPassedError:
+                        logging.getLogger('bg').exception('Seems like the broker had been killed while I was working')
+                else:
+                    logging.getLogger('main').error('Wrong %s', x)
         except ConnectionAbortedError:
             self.possibly_killed(True)
 
-        return self.socket
+        return self.transport
 
     @regular()
     def metrics(self) -> float:
         if self.url_metrics:
             s = service(MetricCollector, self.url_metrics)
             s.metrics(WorkerMetric(
-                self.running_since
+                self.running_since,
+                repr(self.assigned) if self.assigned else None,
+                self.broker_addr,
             ))
         return self.conf.metrics
 
@@ -262,7 +323,8 @@ class Worker(Generic[RequestType, ResponseType]):
             self.inst.kill()
         if self.dir:
             shutil.rmtree(self.dir)
-        return True
+
+        raise TerminationException()
 
 
 class WorkerState(NamedTuple):
@@ -292,7 +354,8 @@ class BrokerEntry(Generic[ResponseType]):
 class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
     def __init__(
             self,
-            cls_req: Type[RequestType], cls_res: Type[ResponseType],
+            cls_req: Type[RequestType],
+            cls_res: Type[ResponseType],
             conf: BrokerConf,
             url_results: Optional[str] = None,
             url_metrics: Optional[str] = None
@@ -333,11 +396,15 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
             pars = self.jobs_pending.popleft()
             wrkr = free_workers.pop()
 
-            s = service(Worker[self.cls_req, self.cls_res], wrkr, ClientConfig(timeout_total=1.))
+            s = service(Worker[self.cls_req, self.cls_res], wrkr, ClientConfig(timeout_total=0.05))
+
+            # we could possibly assign these messages in a different way
 
             try:
                 s.assign(pars)
             except TimeoutError:
+                # todo if a worker had actually received the payload
+                # todo but we do not know of that, then a double assignment will happen
                 logging.getLogger('jobs_try_assign').error('Timeout %s', wrkr)
                 self.jobs_pending.appendleft(pars)
                 continue
@@ -378,9 +445,27 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
 
         self.jobs_try_assign()
 
+    def get_metrics(self) -> BrokerMetric:
+        return BrokerMetric(
+            len(self.workers),
+            len(self.jobs_pending),
+            len(self.jobs),
+            len(self.workers_jobs)
+        )
+
     @rpc()
-    def stats(self) -> Tuple[int]:
-        return len(self.workers),
+    def metrics(self) -> BrokerMetric:
+        return self.get_metrics()
+
+    @regular()
+    def reg_metrics(self) -> float:
+        # how to we allow for reflection in the API?
+
+        if self.url_metrics:
+            s = service(MetricCollector, self.url_metrics)
+            s.metrics(self.get_metrics())
+
+        return self.conf.metrics
 
     @rpc(RPCType.Durable)
     def assign(self, pars: RequestType):
@@ -413,6 +498,18 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
         self.worker_done(sender())
 
     @rpc(RPCType.Durable)
+    def resign(self):
+        k = sender()
+
+        if k in self.workers_jobs:
+            logging.getLogger('resign').debug('Resign %s', k)
+            self.job_resign(k)
+        else:
+            logging.getLogger('resign').error('Unknown %s', k)
+
+        self.jobs_try_assign()
+
+    @rpc(RPCType.Durable)
     def leaving(self):
         s = sender()
 
@@ -440,21 +537,42 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
 
         return self.conf.heartbeat
 
-    @regular()
-    def metrics(self) -> float:
-        # how to we allow for reflection in the API?
-
-        if self.url_metrics:
-            s = service(MetricCollector, self.url_metrics)
-            s.metrics(BrokerMetric(
-                len(self.workers),
-                len(self.jobs_pending),
-                len(self.jobs),
-                len(self.workers_jobs)
-            ))
-
-        return self.conf.metrics
-
     @signal()
     def exit(self):
-        return True
+        raise TerminationException()
+
+
+def main(server_url,
+         conf=ClientConfig(timeout_total=5),
+         **kwargs):
+    service_type = Broker[str, str]
+    T: Type[service_type] = service_type.__class__
+
+    t = Transport.from_url('udp://0.0.0.0')
+
+    with t:
+        ts = EventLoop()
+        ets = ts.transport_add(t)
+        pt = ServiceDefn.from_cls(service_type)
+        r: T = build_wrapper(pt, ets, server_url, conf=conf)
+
+        print(r.metrics())
+
+
+def parser():
+    parser = ArgumentParser()
+
+    logging_parser(parser)
+
+    parser.add_argument(
+        '-A'
+        '--address',
+        dest='server_url',
+        default='udp://127.0.0.1:2345'
+    )
+
+    return parser
+
+
+if __name__ == '__main__':
+    cli_main(main, parser())

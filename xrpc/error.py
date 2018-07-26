@@ -60,5 +60,7 @@ class InvalidFingerprintError(FailedError):
         super().__init__(reason)
 
 
-class TerminationException(Exception):
-    pass
+class TerminationException(BaseException):
+    def __init__(self, return_=None):
+        self.return_ = return_
+        super().__init__(self, return_)

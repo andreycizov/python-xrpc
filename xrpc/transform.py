@@ -1,6 +1,6 @@
-import logging
 import sys
 from inspect import getfullargspec
+
 from typing import Dict, Any, Tuple, Callable, NamedTuple
 
 from xrpc.dsl import ATTR_RPC, ATTR_REGULAR, rpc, regular, signal, ATTR_SIGNAL, ATTR_STARTUP, startup, \
@@ -17,7 +17,7 @@ def build_rpc_list(x, conf_attr_name=ATTR_RPC) -> Tuple[str, Any, Any]:
 
     r = []
 
-    logging.getLogger(f'{__name__}.build_rpc_list').debug('%s %s', x, dir(x))
+    #logging.getLogger(f'{__name__}.build_rpc_list').debug('%s %s', x, dir(x))
 
     for attr_name in dir(x):
         attr_val = getattr(x, attr_name)
@@ -47,16 +47,16 @@ def get_regular(x) -> Dict[str, RegularConf]:
     return r
 
 
-def get_signal(x) -> Dict[str, Tuple[signal, Callable]]:
-    rs = build_rpc_list(x, ATTR_SIGNAL)
+def get_signal(conf) -> Dict[str, Tuple[signal, Callable]]:
+    rs = build_rpc_list(conf, ATTR_SIGNAL)
     r = {}
 
-    for n, attr, x in rs:
-        argspec = getfullargspec(attr)
+    for n, fn, conf in rs:
+        argspec = getfullargspec(fn)
         rtn_type = argspec.annotations.get('return', None)
 
         assert rtn_type in [bool, None], f'Incorrect return type for {n}: {rtn_type}'
-        r[n] = (x, attr)
+        r[n] = (conf, fn)
 
     return r
 
@@ -71,12 +71,12 @@ def get_startup(x) -> Dict[str, Tuple[startup, Callable]]:
     return r
 
 
-def get_socketio(x) -> Dict[str, Tuple[socketio, Callable]]:
-    rs = build_rpc_list(x, ATTR_SOCKETIO)
+def get_socketio(conf) -> Dict[str, Tuple[socketio, Callable]]:
+    rs = build_rpc_list(conf, ATTR_SOCKETIO)
     r = {}
 
-    for n, attr, x in rs:
-        r[n] = (x, attr)
+    for n, fn, conf in rs:
+        r[n] = (conf, fn)
 
     return r
 

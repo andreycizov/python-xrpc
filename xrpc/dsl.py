@@ -1,5 +1,6 @@
-import signal as signalz
 from enum import Enum
+
+import signal as signalz
 from typing import NamedTuple, Tuple
 
 
@@ -25,10 +26,13 @@ ATTR_SIGNAL = 'rpc_signal'
 ATTR_STARTUP = 'rpc_startup'
 ATTR_SOCKETIO = 'rpc_socketio'
 
+DEFAULT_GROUP = 'default'
+
 
 class rpc(NamedTuple):
     type: RPCType = RPCType.Repliable
     """Selected calling convention for the RPC call"""
+    group: str = DEFAULT_GROUP
 
     # add 'RPC GROUPS' to allow certain ports to be used differently
 

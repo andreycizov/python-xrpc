@@ -1,11 +1,12 @@
 import base64
-import datetime
 import inspect
 import logging
 import sys
-import uuid
 from enum import Enum
 from inspect import FullArgSpec
+
+import datetime
+import uuid
 
 from xrpc.generic import build_generic_context as _build_generic_context
 from xrpc.serde.error import SerdeException
@@ -18,10 +19,10 @@ def build_generic_context(*args):
 
 if sys.version_info >= (3, 7):
     from typing import Any, ForwardRef, Optional, Union, List, Dict, Callable, \
-        NamedTuple, Tuple, TypeVar, Iterable
+        Tuple, TypeVar, Iterable
 else:
     from typing import Any, _ForwardRef, Optional, Union, List, Dict, Callable, \
-        NamedTuple, Tuple, TypeVar, Iterable
+        Tuple, TypeVar, Iterable
 from dataclasses import is_dataclass, fields, dataclass
 
 from xrpc.util import time_parse
@@ -478,7 +479,7 @@ def build_obj_module(obj):
 class NamedTupleDeserializer(SerdeTypeDeserializer):
     def __init__(self, parent: 'NamedTupleSerde', t: Any, deps: List[DESER]):
         super().__init__(parent, t, deps)
-        self.fields = [f for f, _ in t._field_types.items()]
+        self.fields = sorted([f for f, _ in t._field_types.items()])
 
     def __call__(self, val: Union[list, dict]) -> Any:
         r = {}
@@ -504,7 +505,7 @@ class NamedTupleDeserializer(SerdeTypeDeserializer):
 class NamedTupleSerializer(SerdeTypeSerializer):
     def __init__(self, parent: 'SerdeType', t: Any, deps: List[SER]):
         super().__init__(parent, t, deps)
-        self.fields = [f for f, _ in t._field_types.items()]
+        self.fields = sorted([f for f, _ in t._field_types.items()])
 
     def __call__(self, val: Any) -> Union[list, dict]:
         return {v: self.deps[k](getattr(val, v)) for k, v in enumerate(self.fields)}
@@ -533,7 +534,7 @@ class NamedTupleSerde(SerdeType):
                 xt = t.__origin__
 
         ctx = SerdeStepContext(mod=build_obj_module(t))
-        return SerdeNode(t, [i.norm(st, ctx) for f, st in xt._field_types.items()], ctx=ctx)
+        return SerdeNode(t, [i.norm(st, ctx) for f, st in sorted(xt._field_types.items())], ctx=ctx)
 
 
 class DataclassDeserializer(SerdeTypeDeserializer):
@@ -601,31 +602,61 @@ class DataclassSerde(SerdeType):
         return SerdeNode(i.norm(t, ctx), [i.norm(f.type, ctx) for f in sorted(fields(xt), key=lambda x: x.name)], ctx)
 
 
-class CallableArgsWrapper(NamedTuple):
+def _get_class_that_defined_method(meth):
+    if inspect.ismethod(meth):
+        for cls in inspect.getmro(meth.__self__.__class__):
+            if cls.__dict__.get(meth.__name__) is meth:
+                return cls
+        meth = meth.__func__  # fallback to __qualname__ parsing
+    if inspect.isfunction(meth):
+        cls = getattr(inspect.getmodule(meth),
+                      meth.__qualname__.split('.<locals>', 1)[0].rsplit('.', 1)[0])
+        if isinstance(cls, type):
+            return cls
+    return getattr(meth, '__objclass__', None)  # handle special descriptor objects
+
+
+def _build_fn_name(fn):
+    name = fn.__module__
+
+    if hasattr(fn, '__class__'):
+        name += '.' + _get_class_that_defined_method(fn).__name__
+
+    name += '.' + fn.__name__
+
+    return name
+
+
+@dataclass()
+class ArgsWrapper:
     method: bool
     name: str
     spec: FullArgSpec
     cls: Optional[Any] = None
 
     @classmethod
-    def from_func(self, fn: Callable):
-        return CallableArgsWrapper(inspect.ismethod(fn), f'{fn.__module__}.{fn.__name__}', inspect.getfullargspec(fn))
+    def from_func(cls, fn: Callable):
+        assert not inspect.ismethod(fn)
+
+        return cls(inspect.ismethod(fn), _build_fn_name(fn), inspect.getfullargspec(fn))
 
     @classmethod
-    def from_func_cls(self, cls: Any, fn: Callable):
-        return CallableArgsWrapper(True, f'{fn.__module__}.{fn.__name__}', inspect.getfullargspec(fn), cls)
+    def from_func_cls(cls, cls_obj: Any, fn: Callable):
+        assert not inspect.ismethod(fn)
+
+        return cls(True, _build_fn_name(fn), inspect.getfullargspec(fn), cls_obj)
 
     def __eq__(self, other):
         if self.__class__ == other.__class__:
-            return super().__eq__(other)
+            return self._get_comparable() == other._get_comparable()
         else:
             return False
 
-    def __hash__(self) -> int:
+    def _get_comparable(self):
         r = (
-            'CallableArgsWrapper',
-            self.name,
-            self.method,
+            self.__class__.__name__,
+            # self.name,
+            # self.method,
             tuple(self.spec.args),
             self.spec.varargs,
             self.spec.varkw,
@@ -633,46 +664,21 @@ class CallableArgsWrapper(NamedTuple):
             tuple(self.spec.kwonlyargs),
             None if self.spec.kwonlydefaults is None else tuple(sorted(self.spec.kwonlydefaults.items())),
             None if self.spec.annotations is None else tuple(sorted(self.spec.annotations.items())),
-            self.cls
+            # self.cls
         )
-        return hash(r)
-
-
-class CallableRetWrapper(NamedTuple):
-    method: bool
-    name: str
-    spec: FullArgSpec
-    cls: Optional[Any] = None
-
-    @classmethod
-    def from_func(self, fn: Callable):
-        return CallableRetWrapper(inspect.ismethod(fn), f'{fn.__module__}.{fn.__name__}', inspect.getfullargspec(fn))
-
-    @classmethod
-    def from_func_cls(self, cls: Any, fn: Callable):
-        return CallableRetWrapper(True, f'{fn.__module__}.{fn.__name__}', inspect.getfullargspec(fn), cls)
-
-    def __eq__(self, other):
-        if self.__class__ == other.__class__:
-            return super().__eq__(other)
-        else:
-            return False
+        return r
 
     def __hash__(self) -> int:
-        r = (
-            'CallableRetWrapper',
-            self.name,
-            self.method,
-            tuple(self.spec.args),
-            self.spec.varargs,
-            self.spec.varkw,
-            self.spec.defaults,
-            tuple(self.spec.kwonlyargs),
-            None if self.spec.kwonlydefaults is None else tuple(sorted(self.spec.kwonlydefaults.items())),
-            None if self.spec.annotations is None else tuple(sorted(self.spec.annotations.items())),
-            self.cls
-        )
+        r = self._get_comparable()
         return hash(r)
+
+
+class CallableArgsWrapper(ArgsWrapper):
+    pass
+
+
+class CallableRetWrapper(ArgsWrapper):
+    pass
 
 
 def build_types(spec: FullArgSpec, is_method=False, allow_missing=False):
@@ -888,7 +894,7 @@ class CallableArgsSerde(SerdeType):
 
         if len(missing_args):
             raise NotImplementedError(
-                f'Function `{t.method}` `{t.name}` not find annotations for arguments named: `{missing_args}`')
+                f'Function `{t}` `{t.name}` not find annotations for arguments named: `{missing_args}`')
 
         return map
 

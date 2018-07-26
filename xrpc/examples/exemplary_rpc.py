@@ -1,18 +1,18 @@
 import logging
 import random
-from time import sleep
+
 from typing import Dict
 
 from xrpc.dsl import rpc, RPCType, regular, signal
-from xrpc.error import TerminationException, HorizonPassedError
+from xrpc.error import TerminationException
 from xrpc.runtime import sender, service
-
-# todo: please note that Request-Reply pattern does would not work with a service that tries
-# todo: to access itself.
-
 # todo: the issue is actually that not only the request-reply pattern wouldn't work
 # todo: but also the fact that an RPC might have circular dependencies
 from xrpc.transport import Origin
+
+
+# todo: please note that Request-Reply pattern does would not work with a service that tries
+# todo: to access itself.
 
 
 class ExemplaryRPC:
@@ -36,7 +36,6 @@ class ExemplaryRPC:
         # how do we write a proper deserializer in such a scenario?
 
         return random.random()
-        pass
 
     @regular()
     def regularly_executable(self, id: int = 1) -> int:
@@ -64,7 +63,7 @@ class ExemplaryRPC:
     def on_exit(self) -> bool:
         # return True if we'd like to actually exit.
         # todo: save the relevant local state here.
-        return True
+        raise TerminationException()
 
 
 class BroadcastClientRPC:
