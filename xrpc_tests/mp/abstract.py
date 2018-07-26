@@ -4,6 +4,7 @@ import sys
 import unittest
 from contextlib import ExitStack
 from itertools import count
+from os import environ
 
 import subprocess
 from dataclasses import field, dataclass
@@ -86,9 +87,15 @@ class Timer:
         return self.get()
 
 
+DEFAULT_LEVEL = logging.INFO
+
+if environ.get('DEBUG', None):
+    DEFAULT_LEVEL = logging.DEBUG
+
+
 @dataclass(frozen=False)
 class ProcessHelper:
-    ls: LoggerSetup = field(default_factory=lambda: LoggerSetup(LL(None, logging.DEBUG), [], ['stream:///stderr']))
+    ls: LoggerSetup = field(default_factory=lambda: LoggerSetup(LL(None, DEFAULT_LEVEL), [], ['stream:///stderr']))
     es: ExitStack = field(default_factory=ExitStack)
     ps: PopenStack = field(default_factory=lambda: PopenStack(10))
 
