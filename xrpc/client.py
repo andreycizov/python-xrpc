@@ -18,7 +18,7 @@ from xrpc.util import time_now
 
 class ClientConfig(NamedTuple):
     timeout_resend: float = 0.033
-    timeout_total: Optional[float] = None
+    timeout_total: Optional[float] = 3.5
     ignore_horizon: bool = False
     """If ```HorizonPassedError``` is passed, restart the action"""
 
