@@ -113,7 +113,7 @@ class ELSpinLockDetector:
     par: 'EventLoop'
 
     max_ctr: int = 3
-    max_iter_secs: float = 0.5
+    max_iter_secs: float = 0.1
 
     sleep_secs: float = 0.02
 
