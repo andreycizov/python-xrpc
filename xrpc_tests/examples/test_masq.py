@@ -4,6 +4,7 @@ import xrpc
 from xrpc.client import client_transport
 from xrpc.dsl import rpc, signal
 from xrpc.error import TerminationException
+from xrpc.popen import wait_all
 from xrpc.runtime import masquerade
 from xrpc_tests.mp.abstract import ProcessHelperCase, server_main
 
@@ -73,3 +74,5 @@ class TestMasquerade(ProcessHelperCase):
             self.assertEqual(b.recv_reply(5), 6)
 
         a.send_signal(SIGTERM)
+
+        self.assertEqual(wait_all(a), [0])

@@ -1,4 +1,5 @@
 from xrpc.examples.exemplary_rpc import BroadcastClientRPC, BroadcastRPC
+from xrpc.popen import wait_all
 from xrpc_tests.mp.abstract import ProcessHelperCase, server_main
 
 
@@ -19,3 +20,5 @@ class TestBroadcast(ProcessHelperCase):
         b = self.ps.popen(server_main, broadcast_main, ub)
 
         self.ps.wait([b, a])
+
+        self.assertEqual(wait_all(b, a), [0, 0])

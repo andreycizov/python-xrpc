@@ -440,10 +440,14 @@ class DictSerde(SerdeType):
         def deser_dict(val):
             r = {}
             try:
-                for k, v in val.items():
+                its = val.items()
+            except BaseException as e:
+                raise SerdeException(val, 'dict_a', t=t, par=e)
+            try:
+                for k, v in its:
                     r[deps[0](k)] = deps[1](v)
             except BaseException as e:
-                raise NotImplementedError(f'{t} {k} {v} {e}')
+                raise SerdeException(val, 'dict_b', t=t, par=e, k=k, v=v)
             return r
 
         return deser_dict

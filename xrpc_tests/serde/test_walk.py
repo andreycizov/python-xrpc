@@ -1,13 +1,11 @@
 import sys
 import unittest
-from inspect import isclass
+
 from typing import NamedTuple, Optional, Dict
 
 from xrpc.const import SERVER_SERDE_INST
-from xrpc.serde import types
-from xrpc.serde.abstract import SerdeType, SerdeInst, SerdeSet, SerdeStepContext
-from xrpc.serde.types import ForwardRefSerde, UnionSerde, AtomSerde, NoneSerde, UUIDSerde, ListSerde, DictSerde, \
-    EnumSerde, NamedTupleSerde, CallableArgsSerde, CallableArgsWrapper
+from xrpc.serde.abstract import SerdeSet, SerdeStepContext
+from xrpc.serde.types import CallableArgsWrapper
 
 
 class Simple2(NamedTuple):
@@ -45,7 +43,7 @@ class TestWalk(unittest.TestCase):
         obj = A()
 
         wrapper = CallableArgsWrapper.from_func(a)
-        wrapper2 = CallableArgsWrapper.from_func(obj.a)
+        wrapper2 = CallableArgsWrapper.from_func_cls(obj, A.a)
 
         x1 = SerdeSet.walk(i, wrapper, SerdeStepContext(mod=sys.modules[__name__]))
         x2 = SerdeSet.walk(i, wrapper2, SerdeStepContext(mod=sys.modules[__name__]))

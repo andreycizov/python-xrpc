@@ -1,9 +1,9 @@
 import logging
 import select
+import socket
 import struct
 from urllib.parse import ParseResult, urlparse, urlunparse
 
-import socket
 from typing import Iterable, Dict, NamedTuple, Type, List, Optional, TypeVar, Generic, Tuple
 
 from xrpc.net import json_pack, json_unpack, RPCPacket
@@ -318,9 +318,12 @@ class UnixTransport(UDPTransport):
     def _clean_client_id(self, addr, reason=None):
         log_tr_net_meta_in.debug('Close %s %s', addr, reason)
 
-        cli = self._fd_clients[addr]
-        del self._fd_clients[addr]
-        cli.close()
+        if addr in self._fd_clients:
+            cli = self._fd_clients[addr]
+            del self._fd_clients[addr]
+            cli.close()
+        else:
+            raise ValueError(f'{addr} {reason}')
 
     def send(self, packet: Packet):
         addr = packet.addr
@@ -376,7 +379,9 @@ class UnixTransport(UDPTransport):
                 except BlockingIOError:
                     break
 
-        for is_ready, (addr, fd) in zip(polled_flags, self._fd_clients_ord):
+        flags_clients = list(zip(polled_flags, self._fd_clients_ord))
+
+        for is_ready, (addr, fd) in flags_clients:
             if not is_ready:
                 continue
 
@@ -387,6 +392,10 @@ class UnixTransport(UDPTransport):
 
                     yield Packet(addr, x.data)
             except ConnectionAbortedError as e:
+                if addr not in self._fd_clients:
+                    log_tr_net_raw_err.error('%s %s', addr, fd)
+                    continue
+
                 self._clean_client_id(addr, str(e))
                 # todo should we raise or should we ignore the error ?
                 # todo upstream possibly needs to know when a client was disconnected

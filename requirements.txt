@@ -2,3 +2,4 @@ pytz
 dataclasses
 bitstruct
 pygelf
+dill

@@ -1,16 +1,20 @@
 import base64
 import logging
+import multiprocessing
 import os
-import pickle
 import sys
 import zlib
 from contextlib import ExitStack, contextmanager
 
+import dill
 import signal
 import subprocess
-from typing import NamedTuple, Callable, Any, Tuple, Dict, List
+from attr import dataclass
+from datetime import timedelta
+from time import sleep
+from typing import Callable, Any, Tuple, Dict, List
 
-from xrpc.util import signal_context
+from xrpc.util import signal_context, time_now
 
 
 @contextmanager
@@ -27,14 +31,39 @@ def cov():
 
 
 def argv_encode(x: Any):
-    return base64.b64encode(zlib.compress(pickle.dumps(x), level=9)).decode()
+    return base64.b64encode(zlib.compress(dill.dumps(x), level=9)).decode()
 
 
 def argv_decode(x: Any):
-    return pickle.loads(zlib.decompress(base64.b64decode(x)))
+    return dill.loads(zlib.decompress(base64.b64decode(x)))
 
 
-class PopenStruct(NamedTuple):
+def wait_all(*waiting, max_wait=5.) -> List[int]:
+    wait_till = time_now() + timedelta(seconds=max_wait)
+    waiting = {i: v for i, v in enumerate(waiting)}
+
+    r: Dict[int, int] = {}
+
+    while wait_till > time_now() and len(waiting):
+        for i, x in list(waiting.items()):
+            try:
+                r[i] = x.wait(0)
+
+                del waiting[i]
+            except multiprocessing.context.TimeoutError:
+                pass
+            except subprocess.TimeoutExpired:
+                pass
+        sleep(0.03)
+
+    if len(waiting):
+        raise TimeoutError(f'{waiting}')
+
+    return [v for _, v in sorted(r.items())]
+
+
+@dataclass
+class PopenStruct:
     fn: Callable
     args: Tuple[Any]
     kwargs: Dict[str, Any]
@@ -83,7 +112,6 @@ class PopenStack:
             try:
                 for x in self.stack:
                     code = x.wait(timeout=self.timeout)
-                    assert code == 0, code
             except subprocess.TimeoutExpired:
                 for x in self.stack:
                     x.send_signal(signal.SIGKILL)

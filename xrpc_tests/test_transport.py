@@ -43,7 +43,7 @@ class TestUDPTransport(ProcessHelperCase):
             S_ADDR = 'udp://0.0.0.0:23454'
             ATTEMPTS = 5
             with Transport.from_url(S_ADDR) as ts, Transport.from_url('udp://') as tc:
-                for i in range(0, 2 ** 16 - 100, 100):
+                for i in [1, 100, 1000, 10000, 50000] + [2**16-1000]:
                     for y in range(ATTEMPTS):
                         pkt = Packet(S_ADDR, b'\x00' * i)
                         tc.send(pkt)
@@ -94,7 +94,10 @@ class TestUnixTransport(ProcessHelperCase):
                 else:
                     raise ValueError('asd')
 
-                for _ in s.read():
+                try:
+                    for _ in s.read():
+                        pass
+                except ConnectionAbortedError:
                     pass
 
                 self.assertEqual(0, len(s._fd_clients))
@@ -116,9 +119,10 @@ class TestUnixTransport(ProcessHelperCase):
 
                 c.close()
 
-                for x in s.read():
-                    raise ValueError('asd')
-                else:
+                try:
+                    for x in s.read():
+                        raise ValueError('asd')
+                except ConnectionAbortedError:
                     pass
 
                 self.assertEqual(0, len(s._fd_clients))
@@ -134,7 +138,11 @@ class TestUnixTransport(ProcessHelperCase):
                 for _ in s.read():
                     pass
                 c.close()
-                for _ in s.read():
+
+                try:
+                    for _ in s.read():
+                        pass
+                except ConnectionAbortedError:
                     pass
 
                 self.assertEqual(0, len(s._fd_clients))

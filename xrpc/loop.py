@@ -1,20 +1,19 @@
 import logging
-import traceback
-from contextlib import contextmanager
-
 import socket
+from contextlib import contextmanager
+from itertools import count
+
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from functools import reduce
-from itertools import count
 from typing import Dict, List, Union, Optional, Callable, Tuple
 
 from xrpc.net import RPCPacket
 from xrpc.trace import log_tr_net_pkt_in, log_tr_net_pkt_err, log_tr_net_pkt_out
 from xrpc.transport import Transport, \
     select_helper, Packet, RPCPacketRaw
-from xrpc.util import time_now
+from xrpc.util import time_now, _log_called_from, _log_traceback
 
 EVPktMatcherFun = Callable[[RPCPacketRaw], bool]
 EVPktHdlr = Callable[[RPCPacketRaw], None]
@@ -23,33 +22,6 @@ EVSleepSchedFun = Callable[[None], Optional[float]]
 EVSleepTimerHdlr = Callable[[None], None]
 
 EVExcHdlr = Callable[[BaseException], bool]
-
-
-def _build_callstack(ignore=1):
-    assert ignore > 0
-
-    INDENT = '  '
-
-    callstack = '\n'.join([INDENT + line.strip() for line in traceback.format_stack()][:-ignore])
-
-    return callstack
-
-
-def _log_called_from(logger, pat='', *args):
-    if len(pat):
-        pat += '\n'
-
-    logger.exception(pat + 'Called from\n%s\n', *args, _build_callstack())
-
-
-def _log_traceback(logger, pat=''):
-    if len(pat):
-        pat += '\n'
-
-    try:
-        raise KeyError()
-    except:
-        logger.debug(pat + _build_callstack(ignore=2))
 
 
 def default_exc_handler(exc: BaseException):
@@ -93,7 +65,6 @@ def exc_handler(exc: EVExcHdlr):
     try:
         yield
     except BaseException as e:
-        #logging.getLogger(__name__).exception('Could not handle the exception here')
         try:
             fe = not exc(e)
         except:
@@ -196,7 +167,7 @@ class EventLoop:
                 sched_item = 0.
             r[k] = sched_item
 
-        self.logger('max_waits.o').warning('%s', r)
+        self.logger('max_waits.o').debug('%s', r)
         return r
 
     def loop(self, max_wait: Optional[float] = None):

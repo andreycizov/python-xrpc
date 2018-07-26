@@ -1,4 +1,5 @@
 from xrpc.examples.exemplary_rpc import BroadcastClientRPC, BroadcastRPC
+from xrpc.popen import wait_all
 from xrpc_tests.mp.abstract import server_main, ProcessHelperCase
 
 
@@ -17,4 +18,5 @@ class TestPingPong(ProcessHelperCase):
 
         a = self.ps.popen(server_main, pong_a_main, url_a, url_b)
         b = self.ps.popen(server_main, pong_b_main, url_b)
-        self.ps.wait([a, b])
+
+        self.assertEqual(wait_all(b, a, max_wait=10), [0, 0])

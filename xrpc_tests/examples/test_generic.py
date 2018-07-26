@@ -4,6 +4,7 @@ from xrpc.client import build_wrapper, ClientConfig
 from xrpc.error import HorizonPassedError
 from xrpc.examples.generic import GenericRPC, Data
 from xrpc.loop import EventLoop
+from xrpc.popen import wait_all
 from xrpc.service import ServiceDefn
 from xrpc.transport import Transport
 from xrpc_tests.mp.abstract import ProcessHelperCase, server_main
@@ -51,4 +52,4 @@ class TestGenericServer(ProcessHelperCase):
         a = self.ps.popen(server_main, generic_a_main, addr_a)
         b = self.ps.popen(generic_b_main, addr_b, addr_a)
 
-        self.ps.wait([b, a])
+        self.assertEqual(wait_all(b, a), [0, 0])

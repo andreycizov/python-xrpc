@@ -46,6 +46,12 @@ class RecursiveA:
         raise TerminationException()
 
 
+class RecursiveC(RecursiveA):
+    @rpc()
+    def status(self) -> List[str]:
+        raise ValueError()
+
+
 class RecursiveB:
     """Make a call to the sender of the message"""
 

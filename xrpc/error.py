@@ -6,7 +6,9 @@ from xrpc.util import time_now
 
 
 class RPCError(Exception):
-    pass
+    def __str__(self):
+        args = ', '.join(self.args)
+        return f'{self.__class__.__name__}({args})'
 
 
 class UndecidedError(RPCError):

@@ -1,7 +1,9 @@
 from _signal import SIGTERM
 
 from xrpc.client import ClientConfig, ClientTransportCircuitBreaker, client_transport
-from xrpc.examples.recursive import Recursive, RecursiveA, RecursiveB
+from xrpc.error import TimeoutError
+from xrpc.examples.recursive import Recursive, RecursiveA, RecursiveB, RecursiveC
+from xrpc.popen import wait_all
 from xrpc_tests.mp.abstract import ProcessHelperCase, server_main
 
 
@@ -27,6 +29,8 @@ class TestRecursive(ProcessHelperCase):
 
         a.send_signal(SIGTERM)
 
+        self.assertEqual(wait_all(a, max_wait=1), [0])
+
     def test_double(self):
         url_a = 'udp://127.0.0.1:32456'
         url_b = 'udp://127.0.0.1:32457'
@@ -39,6 +43,22 @@ class TestRecursive(ProcessHelperCase):
         a.send_signal(SIGTERM)
         b.send_signal(SIGTERM)
 
+        self.assertEqual(wait_all(a, b, max_wait=1), [0, 0])
+
+    def test_double_exc(self):
+        url_a = 'udp://127.0.0.1:42522'
+        url_b = 'udp://127.0.0.1:54352'
+        a = self.ps.popen(server_main, lambda _: (RecursiveC, RecursiveC(url_b)), url_a)
+        b = self.ps.popen(server_main, recursive_b_main, url_b)
+
+        try:
+            with client_transport(RecursiveA, url_a, ClientConfig(ignore_horizon=True, timeout_total=2)) as acli:
+                self.assertEqual(1, acli.poll())
+        except TimeoutError:
+            pass
+
+        self.assertEqual(wait_all(a, b, max_wait=1), [1, 1])
+
     def test_callback_service_failure(self):
         url_b = 'udp://127.0.0.1:32457'
         b = self.ps.popen(server_main, recursive_b_main, url_b)
@@ -48,3 +68,5 @@ class TestRecursive(ProcessHelperCase):
                 acli.count_status()
 
         b.send_signal(SIGTERM)
+
+        self.assertEqual(wait_all(b, max_wait=1), [0])

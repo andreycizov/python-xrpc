@@ -3,6 +3,7 @@ from time import sleep
 from xrpc.client import client_transport
 from xrpc.error import HorizonPassedError
 from xrpc.examples.exemplary_rpc import ExemplaryRPC
+from xrpc.popen import wait_all
 from xrpc_tests.mp.abstract import ProcessHelperCase, server_main
 
 
@@ -26,4 +27,4 @@ class TestExemplary(ProcessHelperCase):
                 except HorizonPassedError:
                     sleep(0)
 
-        self.ps.wait([ax])
+        self.assertEqual(wait_all(ax, max_wait=5), [0])

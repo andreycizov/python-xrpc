@@ -5,13 +5,13 @@ import tempfile
 from collections import deque
 from contextlib import ExitStack
 from inspect import getfullargspec, ismethod
+from itertools import count
 
 import shutil
 import types
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import count
 from signal import SIGTERM
 from subprocess import TimeoutExpired, Popen
 from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple, Union
@@ -201,6 +201,7 @@ class Worker(Generic[RequestType, ResponseType]):
 
     def restart_worker_inst(self):
         self.inst.kill()
+        self.channel.read()
 
         self.inst, self.inst_addr = self.start_worker_inst()
 
@@ -284,7 +285,8 @@ class Worker(Generic[RequestType, ResponseType]):
 
                     ret = x.payload
 
-                    s = service(Broker[self.cls_req, self.cls_res], self.broker_addr, conf=ClientConfig(timeout_total=None))
+                    s = service(Broker[self.cls_req, self.cls_res], self.broker_addr,
+                                conf=ClientConfig(timeout_total=None))
 
                     try:
                         s.done(ret)
@@ -395,10 +397,13 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
         while len(free_workers) and len(self.jobs_pending):
             pars = self.jobs_pending.popleft()
             wrkr = free_workers.pop()
+            self.workers_jobs[wrkr] = pars
 
             s = service(Worker[self.cls_req, self.cls_res], wrkr, ClientConfig(timeout_total=0.05))
 
             # we could possibly assign these messages in a different way
+
+            logging.getLogger('jobs_try_assign').debug('%s %s', wrkr, pars)
 
             try:
                 s.assign(pars)
@@ -406,11 +411,15 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
                 # todo if a worker had actually received the payload
                 # todo but we do not know of that, then a double assignment will happen
                 logging.getLogger('jobs_try_assign').error('Timeout %s', wrkr)
-                self.jobs_pending.appendleft(pars)
-                continue
+
+                if wrkr in self.workers_jobs:
+                    j = self.workers_jobs[wrkr]
+
+                    if j == pars:
+                        del self.workers_jobs[wrkr]
+                        free_workers.append(wrkr)
             else:
                 logging.getLogger('jobs_try_assign').debug('%s %s', wrkr, pars)
-                self.workers_jobs[wrkr] = pars
 
     def worker_new(self, k: Origin):
         logging.getLogger('worker_new').debug('%s', k)
@@ -435,7 +444,8 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
             return
 
         if w not in self.workers_jobs:
-            logging.getLogger('job_done').warning('Worker is not assigned any jobs %s', w)
+            logging.getLogger('job_done').warning('Worker is not assigned any jobs %s %s %s', w, self.workers_jobs,
+                                                  self.jobs_pending)
             return
 
         j = self.workers_jobs[w]
@@ -502,8 +512,9 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
         k = sender()
 
         if k in self.workers_jobs:
-            logging.getLogger('resign').debug('Resign %s', k)
             self.job_resign(k)
+            logging.getLogger('resign').debug('Resigned %s %s %s %s', k, self.jobs, self.jobs_pending,
+                                              self.workers_jobs)
         else:
             logging.getLogger('resign').error('Unknown %s', k)
 

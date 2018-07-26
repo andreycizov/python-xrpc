@@ -3,11 +3,11 @@ import multiprocessing
 import sys
 import unittest
 from contextlib import ExitStack
+from itertools import count
 
 import subprocess
 from dataclasses import field, dataclass
 from datetime import timedelta, datetime
-from itertools import count
 from time import sleep
 from typing import Optional
 
@@ -22,7 +22,7 @@ def helper_main(ls, fn, *args, **kwargs):
         try:
             fn(*args, **kwargs)
         except:
-            logging.getLogger(__name__).exception('From %s %s %s', fn, args, kwargs)
+            logging.getLogger('helper_main').exception('From %s %s %s', fn, args, kwargs)
             raise
 
 
@@ -32,9 +32,8 @@ def server_main(factory_fn, addr, *args, **kwargs):
         tp, rpc = factory_fn(addr, *args, **kwargs)
 
         run_server(tp, rpc, [addr])
-    except:
-        logging.getLogger(__name__ + '.server_main').exception('Exited with: %s %s %s %s', factory_fn, addr, args, kwargs)
-        raise
+    finally:
+        logging.getLogger('server_main').exception('Exited with: %s %s', factory_fn, sys.exc_info())
 
 
 def wait_items(waiting, max_wait=40):
@@ -117,7 +116,8 @@ class ProcessHelper:
 
 class ProcessHelperCase(unittest.TestCase):
     def _get_ls(self) -> LoggerSetup:
-        return LoggerSetup(LL(None, logging.DEBUG), [], ['stream:///stderr'])
+        return LoggerSetup(LL(None, logging.DEBUG), [
+        ], ['stream:///stderr'])
 
     def step(self):
         logging.getLogger(self.__class__.__name__).warning(f'[{next(self.steps)}]')

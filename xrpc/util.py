@@ -1,9 +1,10 @@
-import signal
+import traceback
 from contextlib import contextmanager
-from datetime import datetime
-from typing import Union, Callable, Any
 
 import pytz
+import signal
+from datetime import datetime
+from typing import Union, Any
 
 
 @contextmanager
@@ -23,3 +24,30 @@ def time_now() -> datetime:
 
 def time_parse(v, format) -> datetime:
     return pytz.utc.localize(datetime.strptime(v, format))
+
+
+def _build_callstack(ignore=1):
+    assert ignore > 0
+
+    INDENT = '  '
+
+    callstack = '\n'.join([INDENT + line.strip() for line in traceback.format_stack()][:-ignore])
+
+    return callstack
+
+
+def _log_called_from(logger, pat='', *args):
+    if len(pat):
+        pat += '\n'
+
+    logger.exception(pat + 'Called from\n%s\n', *args, _build_callstack())
+
+
+def _log_traceback(logger, pat=''):
+    if len(pat):
+        pat += '\n'
+
+    try:
+        raise KeyError()
+    except:
+        logger.debug(pat + _build_callstack(ignore=2))

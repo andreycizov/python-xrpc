@@ -1,10 +1,8 @@
-import sys
 import unittest
-from inspect import isclass
-from typing import NamedTuple, Optional, Dict, TypeVar, Generic
 
-from xrpc.serde import types
-from xrpc.serde.abstract import SerdeType, SerdeInst, SerdeSet
+from typing import NamedTuple, Optional, Dict, TypeVar
+
+from xrpc.serde.abstract import SerdeInst, SerdeSet
 from xrpc.serde.types import ForwardRefSerde, UnionSerde, AtomSerde, NoneSerde, UUIDSerde, ListSerde, DictSerde, \
     EnumSerde, NamedTupleSerde, CallableArgsSerde, CallableArgsWrapper, TypeVarSerde
 
@@ -49,7 +47,7 @@ class TestWalkGeneric(unittest.TestCase):
         obj = A()
 
         wrapper = CallableArgsWrapper.from_func(a)
-        wrapper2 = CallableArgsWrapper.from_func(obj.a)
+        wrapper2 = CallableArgsWrapper.from_func_cls(A, A.a)
 
         x1 = SerdeSet.walk(i, wrapper)
         x2 = SerdeSet.walk(i, wrapper2)

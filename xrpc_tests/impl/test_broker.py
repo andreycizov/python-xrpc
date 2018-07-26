@@ -13,6 +13,7 @@ from xrpc.dsl import RPCType, rpc, regular, signal
 from xrpc.error import TerminationException
 from xrpc.impl.broker import Broker, Worker, BrokerConf, MetricCollector, NodeMetric, WorkerMetric
 from xrpc.logging import LoggerSetup, LL
+from xrpc.popen import wait_all
 from xrpc.util import time_now
 from xrpc_tests.mp.abstract import ProcessHelperCase, server_main
 
@@ -129,7 +130,10 @@ class TestBroker(ProcessHelperCase):
     def _get_ls(self) -> LoggerSetup:
         return LoggerSetup(LL(None, logging.DEBUG), [
             LL('xrpc.generic', logging.ERROR),
-            LL('xrpc.serde', logging.ERROR)
+            LL('xrpc.serde', logging.ERROR),
+            LL('xrpc.tr.n.r', logging.INFO),
+            LL('xrpc.tr.n.s', logging.INFO),
+            LL('xrpc.loop', logging.INFO),
         ], ['stream:///stderr'])
 
     def test_workflow_a(self):
@@ -138,9 +142,9 @@ class TestBroker(ProcessHelperCase):
         res_addr = 'udp://127.0.0.1:7485?finished=finished_a'
         w_addr = 'udp://127.0.0.1'
 
-        a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr, None)
-        b = self.ps.popen(server_main, run_worker, w_addr, conf, broker_addr)
-        c = self.ps.popen(server_main, run_results, res_addr)
+        brpo = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr, None)
+        wrpo = self.ps.popen(server_main, run_worker, w_addr, conf, broker_addr)
+        repo = self.ps.popen(server_main, run_results, res_addr)
 
         with self.ps.timer(5.) as tr, client_transport(
                 Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
@@ -152,9 +156,9 @@ class TestBroker(ProcessHelperCase):
         with client_transport(Broker[Request, Response], broker_addr) as br:
             br.assign(Request(1))
 
-        self.ps.wait([c])
+        self.ps.wait([repo])
 
-        b.send_signal(SIGTERM)
+        wrpo.send_signal(SIGTERM)
 
         with self.ps.timer(5.) as tr, client_transport(Broker[Request, Response], broker_addr) as br:
             x = 1
@@ -162,7 +166,7 @@ class TestBroker(ProcessHelperCase):
                 x = br.metrics().workers
                 tr.sleep(1)
 
-        a.send_signal(SIGTERM)
+        brpo.send_signal(SIGTERM)
 
     def test_workflow_b(self):
         conf = BrokerConf()
@@ -195,6 +199,8 @@ class TestBroker(ProcessHelperCase):
                 tr.sleep(1)
 
         a.send_signal(SIGTERM)
+
+        self.assertEqual(wait_all(a, b, c, max_wait=1), [0, 0, 0])
 
     def test_kill_child(self):
         conf = BrokerConf(heartbeat=0.5, max_pings=10)
@@ -233,6 +239,8 @@ class TestBroker(ProcessHelperCase):
 
         c.send_signal(SIGTERM)
         a.send_signal(SIGTERM)
+
+        self.assertEqual(wait_all(a, b, c, max_wait=1), [0, 0, 0])
 
     def test_metrics(self):
         try:
@@ -279,6 +287,8 @@ class TestBroker(ProcessHelperCase):
             b.send_signal(SIGTERM)
             c.send_signal(SIGTERM)
             a.send_signal(SIGTERM)
+
+            self.assertEqual(wait_all(a, b, c, max_wait=4), [0, 0, 0])
         except:
             logging.getLogger(__name__).exception('Now exiting')
             raise
@@ -302,6 +312,7 @@ class TestBroker(ProcessHelperCase):
                 br.assign(Request(5, when=time_now() + timedelta(seconds=3)))
 
             x = {}
+
             with self.ps.timer(20) as tr, client_transport(MetricReceiver, metric_addr,
                                                            ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
                 while len(x) <= 1:
@@ -328,6 +339,8 @@ class TestBroker(ProcessHelperCase):
             b.send_signal(SIGTERM)
             c.send_signal(SIGTERM)
             a.send_signal(SIGTERM)
+
+            self.assertEqual(wait_all(a, b, c, max_wait=5), [0, 0, 0])
         except:
             logging.getLogger(__name__).exception('Now exiting')
             raise
