@@ -89,7 +89,7 @@ class Timer:
 
 DEFAULT_LEVEL = logging.INFO
 
-if environ.get('DEBUG', None):
+if environ.get('DEBUGXXX', None):
     DEFAULT_LEVEL = logging.DEBUG
 
 
@@ -123,7 +123,7 @@ class ProcessHelper:
 
 class ProcessHelperCase(unittest.TestCase):
     def _get_ls(self) -> LoggerSetup:
-        return LoggerSetup(LL(None, logging.DEBUG), [
+        return LoggerSetup(LL(None, DEFAULT_LEVEL), [
         ], ['stream:///stderr'])
 
     def step(self):

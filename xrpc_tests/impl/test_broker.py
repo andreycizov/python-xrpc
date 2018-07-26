@@ -15,7 +15,7 @@ from xrpc.impl.broker import Broker, Worker, BrokerConf, MetricCollector, NodeMe
 from xrpc.logging import LoggerSetup, LL
 from xrpc.popen import wait_all
 from xrpc.util import time_now
-from xrpc_tests.mp.abstract import ProcessHelperCase, server_main
+from xrpc_tests.mp.abstract import ProcessHelperCase, server_main, DEFAULT_LEVEL
 
 
 @dataclass(eq=True, frozen=True)
@@ -128,7 +128,7 @@ def run_metrics(addr):
 
 class TestBroker(ProcessHelperCase):
     def _get_ls(self) -> LoggerSetup:
-        return LoggerSetup(LL(None, logging.DEBUG), [
+        return LoggerSetup(LL(None, DEFAULT_LEVEL), [
             LL('xrpc.generic', logging.ERROR),
             LL('xrpc.serde', logging.ERROR),
             LL('xrpc.tr.n.r', logging.INFO),
