@@ -192,10 +192,11 @@ class EventLoop:
                 continue
 
             if sched_item < 0.:
-                self.logger('max_waits').warning('`%s` (%s < 0.)', v.scheduler, sched_item)
+                self.logger('max_waits.e').warning('`%s` (%s < 0.)', v.scheduler, sched_item)
                 sched_item = 0.
             r[k] = sched_item
 
+        self.logger('max_waits.o').warning('%s', r)
         return r
 
     def loop(self, max_wait: Optional[float] = None):

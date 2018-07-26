@@ -284,7 +284,7 @@ class Worker(Generic[RequestType, ResponseType]):
 
                     ret = x.payload
 
-                    s = service(Broker[self.cls_req, self.cls_res], self.broker_addr)
+                    s = service(Broker[self.cls_req, self.cls_res], self.broker_addr, conf=ClientConfig(timeout_total=None))
 
                     try:
                         s.done(ret)
@@ -483,7 +483,7 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
     def done(self, jr: ResponseType):
         if self.url_results:
             try:
-                s = service(BrokerResult[self.cls_res], self.url_results)
+                s = service(BrokerResult[self.cls_res], self.url_results, conf=ClientConfig(timeout_total=None))
 
                 s.finished(jr)
             except HorizonPassedError:

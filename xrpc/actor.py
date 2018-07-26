@@ -1,6 +1,9 @@
 import contextlib
 import logging
+import os
+from tempfile import mkdtemp
 
+import shutil
 from dataclasses import dataclass
 from datetime import timedelta, datetime
 from functools import partial
@@ -16,7 +19,7 @@ from xrpc.runtime import ExecutionContext
 from xrpc.serde.abstract import SerdeStruct
 from xrpc.service import SocketIOEntrySet, RegularEntrySet, RPCEntrySet, SignalEntrySet
 from xrpc.trace import log_tr_act
-from xrpc.transport import Transport, RPCPacketRaw, Transports
+from xrpc.transport import Transport, RPCPacketRaw, Transports, Packet
 from xrpc.util import signal_context, time_now
 
 
@@ -32,10 +35,12 @@ class TerminatingHandler:
     def exc_ctx(self, reg_def):
         try:
             yield
-        #except EventLoopEmpty:
+        # except EventLoopEmpty:
         #    raise
         except TerminationException:
             self.actor.terminate('te1_' + repr(reg_def))
+        except EventLoopEmpty:
+            raise
         except BaseException:
             _log_called_from(logging.getLogger(f'{__name__}.{self.__class__.__name__}'), 'While %s', reg_def)
             self.actor.terminate('be' + repr(reg_def))
@@ -173,7 +178,7 @@ class LoggingActor:
         return log_tr_act(name)
 
 
-class SignalRunner(LoggingActor):
+class SignalRunner(LoggingActor, TerminatingHandler):
     # remove an actor whenever any of it's signal handlers have returned true
     # need to dynamically manage the state of the current handlers.
 
@@ -181,15 +186,42 @@ class SignalRunner(LoggingActor):
     # a signal runner terminates whenever it's empty
     def __init__(
             self,
+            el: EventLoop,
     ):
+        self.el = el
         self.idx_ctr = count()
         self.acts: Dict[int, Actor] = {}
         self.ssighs: Dict[int, List[SigHdlrEntry]] = {}
 
         self.ces: Dict[int, ContextManager] = {}
 
+        self.has_transport = False
+        # we use that to wake up our running thread
+
+    def establish_transport(self):
+        self.has_transport = True
+
+        self.path_temp = mkdtemp()
+
+        self.path_unix = 'unix://' + os.path.join(self.path_temp, 'sock.sock')
+        self.tran = Transport.from_url(self.path_unix + '#bind')
+        self.tran_ref = self.el.transport_add(self.tran)
+        self.tran_ref.push_raw(ELPollEntry(
+            self.handle_packet,
+        ))
+
+    def demolish_transport(self):
+        self.tran_ref.remove()
+        self.tran.close()
+        shutil.rmtree(self.path_temp)
+
+        self.has_transport = False
+
     def add(self, act: 'Actor', signals: Dict[int, List[SignalHdlr]]) -> SignalRunnerRef:
         self.logger('act.add').warning('%s %s', act, signals)
+
+        if not self.has_transport:
+            self.establish_transport()
 
         new_idx = next(self.idx_ctr)
         self.acts[new_idx] = act
@@ -221,6 +253,8 @@ class SignalRunner(LoggingActor):
                 self._del_hdlr(k)
             else:
                 self.ssighs[k] = sighs
+        if len(self.ssighs) == 0:
+            self.demolish_transport()
 
     def _new_hdlr(self, code: int):
         self.logger('hdlr.add').debug('%s', code)
@@ -239,18 +273,46 @@ class SignalRunner(LoggingActor):
             self.logger('hdlr.rm').exception('%s', code)
             raise
 
-    def signal_handler(self, sig, frame):
-        self.logger('hdlr.x').warning('%s %s', sig, frame)
+    def handle_packet(self, flags: Optional[List[bool]]):
+        while True:
+            try:
+                for packet in self.tran.read(flags):
+                    code = int(packet.data.decode())
 
-        for x in list(self.ssighs[sig]):
-            act = self.acts[x.act]
+                    self.handle_actor(code)
+            except ConnectionAbortedError:
+                continue
+            else:
+                return
+
+    def handle_actor(self, sig):
+        for sighe in self.ssighs[sig]:
+            if sighe.act not in self.acts:
+                continue
+
+            act = self.acts[sighe.act]
 
             try:
-                act.ctx().exec('sig', x.sigh)
+                act.ctx().exec('sig', sighe.sigh)
             except TerminationException:
                 act.terminate('sigte')
             except:
                 logging.getLogger(__name__ + '.' + self.__class__.__name__).exception('%s %s', sig, frame)
+
+    def signal_handler(self, sig, frame):
+        self.logger('hdlr.x').warning('%s %s', sig, frame)
+
+        with Transport.from_url(self.path_unix) as t:
+            sig = str(sig).encode()
+            t.send(Packet(self.path_unix, sig))
+
+
+@dataclass(eq=True)
+class HandlingMarker:
+    pass
+
+
+HANDLING = HandlingMarker()
 
 
 class RPCGroupRunner(Terminating, TerminatingHandler):
@@ -309,12 +371,15 @@ class RPCGroupRunner(Terminating, TerminatingHandler):
 
         return rpc_def
 
+    def has_returned(self, key):
+        return key in self.log_dict and self.log_dict[key] != HANDLING
+
     def packet_reply(self, raw_packet: RPCPacketRaw, p: RPCPacket, ret: Any):
         rpc_def = self._get_rpc(p.name)
 
         assert rpc_def.conf.type == RPCType.Repliable, p.name
 
-        has_returned = p.key in self.log_dict
+        has_returned = self.has_returned(p.key)
         assert not has_returned
 
         ret_payload = self.serde.serialize(rpc_def.res, ret)
@@ -328,86 +393,110 @@ class RPCGroupRunner(Terminating, TerminatingHandler):
     def packet_handle(self, packet: RPCPacket, raw_packet: RPCPacketRaw, args, kwargs):
         rpc_def = self._get_rpc(packet.name)
 
-        rp: Optional[RPCPacket] = None
+        # try:
+        # some RPCs may return earlier than exiting themselves
+        # we make sure the RPC can not return the value twice
+
+        has_returned = self.has_returned(packet.key)
+
+        ctx = self.actor.ctx(
+            chan_def=self.group,
+            origin=raw_packet.addr,
+            reply=partial(self.packet_reply, raw_packet, packet)
+        )
 
         try:
-            # some RPCs may return earlier than exiting themselves
-            # we make sure the RPC can not return the value twice
-
-            has_returned = packet.key in self.log_dict
-
-            ctx = self.actor.ctx(
-                chan_def=self.group,
-                origin=raw_packet.addr,
-                reply=partial(self.packet_reply, raw_packet, packet)
+            ret = ctx.exec('call', rpc_def.fn, *args, **kwargs)
+        except TerminationException:
+            raise
+        except Exception as e:
+            _log_called_from(
+                logging.getLogger(__name__),
+                'While receiving the payload [%s][%s][%s]', packet.name, args, kwargs
             )
+            raise InternalError(str(e))
 
-            try:
-                ret = ctx.exec('call', rpc_def.fn, *args, **kwargs)
-            except TerminationException:
-                raise
-            except Exception as e:
-                logging.getLogger(__name__).exception(
-                    'While receiving the payload [%s][%s][%s]', packet.name, args, kwargs)
-                raise InternalError(str(e))
-
-            if rpc_def.conf.type == RPCType.Repliable:
-                if not has_returned:
-                    self.packet_reply(raw_packet, packet, ret)
-                elif has_returned and ret is None:
-                    pass
-                elif has_returned and ret is not None:
-                    raise ValueError()
-                else:
-                    raise NotImplementedError()
-        except InternalError as e:
-            rp = RPCPacket(packet.key, RPCPacketType.Rep, RPCReply.internal.value, e.reason)
-            _log_called_from(logging.getLogger(__name__), 'While receiving the payload [%s %s %s] %s', packet, args,
-                             kwargs, rpc_def)
-            self.actor.terminate('ie_' + repr(e))
-        except TerminationException as e:
-            self.actor.terminate('te4_' + repr(e))
-        finally:
-            if rp and rpc_def.conf.type == RPCType.Repliable:
-                self.chan.send(RPCPacketRaw(raw_packet.addr, rp))
+        if rpc_def.conf.type == RPCType.Repliable:
+            if not has_returned:
+                self.packet_reply(raw_packet, packet, ret)
+            elif has_returned and ret is None:
+                pass
+            elif has_returned and ret is not None:
+                raise ValueError(self.log_dict[packet.key])
+            else:
+                raise NotImplementedError()
+        # except InternalError as e:
+        #     # we must terminate only once.
+        #
+        #     rp = RPCPacket(packet.key, RPCPacketType.Rep, RPCReply.internal.value, e.reason)
+        #     _log_called_from(logging.getLogger(__name__), 'While receiving the payload [%s %s %s] %s', packet, args,
+        #                      kwargs, rpc_def)
+        #     self.actor.terminate('ie_' + repr(e))
+        # except TerminationException as e:
+        #     # we must terminate only once
+        #     self.actor.terminate('te4_' + repr(e))
+        # finally:
+        #     if rp and rpc_def.conf.type == RPCType.Repliable:
+        #         self.chan.send(RPCPacketRaw(raw_packet.addr, rp))
 
     def packet_receive(self, raw_packet: RPCPacketRaw):
         pkt = raw_packet.packet
 
-        pkt_reply: Optional[RPCPacket] = None
+        def reply_now(a: str, b: Any):
+            rp = RPCPacket(pkt.key, RPCPacketType.Rep, a, b)
+
+            self.chan.send(RPCPacketRaw(raw_packet.addr, rp))
 
         try:
             rpc_def = self._get_rpc(pkt.name)
+        except InvalidFingerprintError as e:
+            reply_now(RPCReply.fingerprint.value, self.serde.serialize(Optional[str], e.reason))
+            return
 
+        try:
             if pkt.key in self.log_dict:
                 rep = self.log_dict[pkt.key]
 
+                if rep == HANDLING:
+                    # todo short-circuit packets that we have received (maybe acknowledge them even)
+                    return
+
                 if rpc_def.conf.type != RPCType.Signalling:
-                    pkt_reply = RPCPacket(pkt.key, RPCPacketType.Rep, RPCReply.ok.value, rep)
-            else:
-                try:
-                    args, kwargs = self.serde.deserialize(rpc_def.req, pkt.payload)
-                except Exception as e:
-                    # could not deserialize the payload correctly
-                    logging.exception(f'Failed to deserialize packet from {raw_packet.addr}')
-                    raise InvalidFingerprintError('args')
+                    reply_now(RPCReply.ok.value, rep)
 
-                self.packet_handle(pkt, raw_packet, args, kwargs)
-
-                if rpc_def.conf.type == RPCType.Durable:
-                    pkt_reply = RPCPacket(pkt.key, RPCPacketType.Rep, RPCReply.ok.value, None)
-                    self.log_dict[pkt.key] = None
-                elif rpc_def.conf.type == RPCType.Signalling:
-                    self.log_dict[pkt.key] = None
-        except InvalidFingerprintError as e:
-            pkt_reply = RPCPacket(pkt.key, RPCPacketType.Rep, RPCReply.fingerprint.value,
-                                  self.serde.serialize(Optional[str], e.reason))
+                return
         except HorizonPassedError as e:
-            pkt_reply = RPCPacket(pkt.key, RPCPacketType.Rep, RPCReply.horizon.value,
-                                  self.serde.serialize(datetime, e.when))
+            reply_now(RPCReply.horizon.value, self.serde.serialize(datetime, e.when))
+            return
 
-        if pkt_reply:
-            self.chan.send(RPCPacketRaw(raw_packet.addr, pkt_reply))
+        try:
+            args, kwargs = self.serde.deserialize(rpc_def.req, pkt.payload)
+        except Exception as e:
+            # could not deserialize the payload correctly
+            logging.exception(f'Failed to deserialize packet from {raw_packet.addr}')
+            reply_now(RPCReply.fingerprint.value, self.serde.serialize(Optional[str], 'args'))
+            return
+
+        try:
+            self.log_dict[pkt.key] = HANDLING
+
+            self.packet_handle(pkt, raw_packet, args, kwargs)
+
+            if rpc_def.conf.type == RPCType.Durable:
+                pkt_reply = RPCPacket(pkt.key, RPCPacketType.Rep, RPCReply.ok.value, None)
+                self.log_dict[pkt.key] = None
+            elif rpc_def.conf.type == RPCType.Signalling:
+                self.log_dict[pkt.key] = None
+
+        except InternalError as e:
+            reply_now(RPCReply.internal.value, e.reason)
+            _log_called_from(logging.getLogger(__name__), 'While receiving the payload [%s %s %s] %s', pkt, args,
+                             kwargs, rpc_def)
+            self.actor.terminate('ie_' + repr(e))
+        except TerminationException as e:
+            if rpc_def.conf.type == RPCType.Repliable:
+                reply_now(RPCReply.ok.value, self.serde.serialize(rpc_def.res, None))
+            self.actor.terminate('te4_' + repr(e))
 
 
 class Actor(Terminating, LoggingActor):
@@ -513,7 +602,7 @@ def actor_create(
 
 def run_server(cls, cls_inst, bind_urls: Dict[str, str], horizon_each=60.):
     el = EventLoop()
-    sr = SignalRunner()
+    sr = SignalRunner(el)
 
     actor_create(el, sr, cls, cls_inst, bind_urls, horizon_each)
 
