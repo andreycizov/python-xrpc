@@ -1,9 +1,13 @@
 import logging
+import os
 import select
 import socket
 import struct
+import tempfile
 from urllib.parse import ParseResult, urlparse, urlunparse
 
+import shutil
+from dataclasses import dataclass
 from typing import Iterable, Dict, NamedTuple, Type, List, Optional, TypeVar, Generic, Tuple
 
 from xrpc.net import json_pack, json_unpack, RPCPacket
@@ -29,7 +33,8 @@ class RPCPacketRaw(NamedTuple):
     packet: RPCPacket
 
 
-class Packet(NamedTuple):
+@dataclass(eq=True, frozen=True)
+class Packet:
     addr: Origin
     data: bytes
 
@@ -276,7 +281,16 @@ class UnixTransport(UDPTransport):
         self._client_ctr = 0
         self._fd_clients: Dict[Origin, socket] = {}
 
-        self._path = parsed.path
+        self._temp_dir = None
+
+        path = parsed.path
+
+        if not path:
+            self._temp_dir = tempfile.mkdtemp()
+
+            path = os.path.join(self._temp_dir, 'unix.sock')
+
+        self._path = path
 
         if should_bind:
             self._fd_bind = sock
@@ -313,7 +327,7 @@ class UnixTransport(UDPTransport):
 
     @property
     def origin(self) -> Origin:
-        return f'unix:///{self._path}'
+        return f'unix://{self._path}'
 
     def _clean_client_id(self, addr, reason=None):
         log_tr_net_meta_in.debug('Close %s %s', addr, reason)
@@ -346,7 +360,7 @@ class UnixTransport(UDPTransport):
             self._clean_client_id(addr, str(e))
             # todo should we raise or should we ignore the error ?
             # todo upstream possibly needs to know when a client was disconnected
-            raise ConnectionAbortedError(str(e))
+            raise ConnectionAbortedError(addr, str(e))
 
     def read(self, polled_flags: Optional[List[bool]] = None) -> Iterable[Packet]:
         if polled_flags is None:
@@ -399,9 +413,13 @@ class UnixTransport(UDPTransport):
                 self._clean_client_id(addr, str(e))
                 # todo should we raise or should we ignore the error ?
                 # todo upstream possibly needs to know when a client was disconnected
-                raise
+                raise ConnectionAbortedError(addr, str(e))
 
     def close(self):
+        if self._temp_dir:
+            shutil.rmtree(self._temp_dir)
+            self._temp_dir = None
+
         for _, fd in self._fd_clients_ord:
             log_tr_net_meta_in.debug('[1] Close %s', fd)
             fd.close()
@@ -411,6 +429,7 @@ class UnixTransport(UDPTransport):
         if self._fd_bind:
             log_tr_net_meta_in.debug('[2] Close %s', self._fd_bind)
             self._fd_bind.close()
+            self._fd_bind = None
 
 
 TRANSPORT_MAP: Dict[str, Type[Transport]] = {

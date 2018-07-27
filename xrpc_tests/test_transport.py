@@ -1,6 +1,8 @@
 from tempfile import mkdtemp
+from urllib.parse import urlunparse, urlparse
 
 import shutil
+from dataclasses import replace
 
 from xrpc.transport import Transport, Packet, select_helper, _insert_ordered
 from xrpc_tests.mp.abstract import ProcessHelperCase
@@ -149,3 +151,18 @@ class TestUnixTransport(ProcessHelperCase):
         x = _insert_ordered([True, True], False, 'b', ['a', 'b', 'c'])
 
         self.assertEqual([True, False, True], x)
+
+    def test_unix_autopath(self):
+
+        url = 'unix://'
+
+        with Transport.from_url(url + '#bind') as s:
+            with Transport.from_url(s.origin) as c:
+                pkt = Packet(s.origin, b'asd')
+                c.send(pkt)
+
+                for x in s.read(select_helper(s.fds)):
+                    pkt_addr = urlparse(pkt.addr)
+                    pkt_addr = urlunparse(pkt_addr._replace(netloc='0'))
+                    pkt = replace(pkt, addr=pkt_addr)
+                    self.assertEqual(pkt, x)
