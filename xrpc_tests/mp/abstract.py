@@ -5,7 +5,9 @@ import unittest
 from contextlib import ExitStack
 from itertools import count
 from os import environ
+from tempfile import mkdtemp
 
+import shutil
 import subprocess
 from dataclasses import field, dataclass
 from datetime import timedelta, datetime
@@ -35,6 +37,17 @@ def server_main(factory_fn, addr, *args, **kwargs):
         run_server(tp, rpc, [addr])
     finally:
         logging.getLogger('server_main').exception('Exited with: %s %s', factory_fn, sys.exc_info())
+
+
+def server_main_new(factory_fn, addrs, *args, **kwargs):
+    logging.getLogger(__name__ + '.server_main').debug('%s %s %s %s', factory_fn, addrs, args, kwargs)
+    try:
+        tp, rpc = factory_fn(*args, **kwargs)
+
+        run_server(tp, rpc, addrs)
+    finally:
+        logging.getLogger('server_main').exception('Exited with: %s %s', factory_fn, sys.exc_info())
+
 
 
 def wait_items(waiting, max_wait=40):
@@ -89,7 +102,7 @@ class Timer:
 
 DEFAULT_LEVEL = logging.INFO
 
-if environ.get('DEBUGXXX', None):
+if environ.get('DEBUG', None):
     DEFAULT_LEVEL = logging.DEBUG
 
 
@@ -98,10 +111,6 @@ class ProcessHelper:
     ls: LoggerSetup = field(default_factory=lambda: LoggerSetup(LL(None, DEFAULT_LEVEL), [], ['stream:///stderr']))
     es: ExitStack = field(default_factory=ExitStack)
     ps: PopenStack = field(default_factory=lambda: PopenStack(10))
-
-    def __post_init__(self):
-        self.es.enter_context(logging_setup(self.ls))
-        self.es.enter_context(self.ps)
 
     def popen(self, fn, *args, **kwargs):
         b = popen(helper_main, self.ls, fn, *args, **kwargs)
@@ -115,6 +124,9 @@ class ProcessHelper:
         return Timer(max=max)
 
     def __enter__(self):
+        self.es.enter_context(logging_setup(self.ls))
+        self.es.enter_context(self.ps)
+
         return self
 
     def __exit__(self, *args):
@@ -136,6 +148,8 @@ class ProcessHelperCase(unittest.TestCase):
     def setUp(self):
         self.steps = count()
         self.ps = self.make_ph().__enter__()
+        self.dtemp = mkdtemp()
 
     def tearDown(self):
         self.ps.__exit__(*sys.exc_info())
+        shutil.rmtree(self.dtemp)
