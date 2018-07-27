@@ -130,7 +130,8 @@ class ProcessHelperCase(unittest.TestCase):
         logging.getLogger(self.__class__.__name__).warning(f'[{next(self.steps)}]')
 
     def make_ph(self):
-        return ProcessHelper(self._get_ls())
+        r = ProcessHelper(self._get_ls())
+        return r
 
     def setUp(self):
         self.steps = count()

@@ -1,9 +1,7 @@
-import logging
 from tempfile import mkdtemp
 
 import shutil
 
-from xrpc.logging import logging_setup, LoggerSetup, LL
 from xrpc.transport import Transport, Packet, select_helper, _insert_ordered
 from xrpc_tests.mp.abstract import ProcessHelperCase
 
@@ -38,20 +36,18 @@ class TestUDPTransport(ProcessHelperCase):
             t.send(Packet('udp://127.0.0.1:23453', b''))
 
     def test_max_sendto(self):
-        with logging_setup(
-                LoggerSetup(LL(None, logging.DEBUG), [LL('net.trace.raw', logging.ERROR)], ['stream:///stderr'])):
-            S_ADDR = 'udp://0.0.0.0:23454'
-            ATTEMPTS = 5
-            with Transport.from_url(S_ADDR) as ts, Transport.from_url('udp://') as tc:
-                for i in [1, 100, 1000, 10000, 50000] + [2**16-1000]:
-                    for y in range(ATTEMPTS):
-                        pkt = Packet(S_ADDR, b'\x00' * i)
-                        tc.send(pkt)
+        S_ADDR = 'udp://0.0.0.0:23454'
+        ATTEMPTS = 5
+        with Transport.from_url(S_ADDR) as ts, Transport.from_url('udp://') as tc:
+            for i in [1, 100, 1000, 10000, 50000] + [2**16-1000]:
+                for y in range(ATTEMPTS):
+                    pkt = Packet(S_ADDR, b'\x00' * i)
+                    tc.send(pkt)
 
-                        select_helper([ts.fd], max_wait=1.)
+                    select_helper([ts.fd], max_wait=1.)
 
-                        for pkt2 in ts.read():
-                            pass
+                    for pkt2 in ts.read():
+                        pass
 
 
 class TestUnixTransport(ProcessHelperCase):
