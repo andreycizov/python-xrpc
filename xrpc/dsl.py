@@ -33,6 +33,8 @@ class rpc(NamedTuple):
     type: RPCType = RPCType.Repliable
     """Selected calling convention for the RPC call"""
     group: str = DEFAULT_GROUP
+    exc: bool = False
+    """If an exception is raised while processing the packet from the transport, run this one"""
 
     # add 'RPC GROUPS' to allow certain ports to be used differently
 

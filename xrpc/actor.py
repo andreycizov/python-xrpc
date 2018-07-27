@@ -13,7 +13,7 @@ from typing import List, Dict, Optional, Callable, Any, ContextManager
 from xrpc.dict import RPCLogDict
 from xrpc.dsl import RPCType, DEFAULT_GROUP
 from xrpc.error import HorizonPassedError, InvalidFingerprintError, TerminationException
-from xrpc.loop import EventLoop, ELTransportRef, ELPktEntry, ELWaitEntry, ELPollEntry, EventLoopEmpty
+from xrpc.loop import EventLoop, ELTransportRef, ELPktEntry, ELWaitEntry, ELPollEntry, EventLoopEmpty, ELExcEntry
 from xrpc.net import RPCPacket, RPCReply, RPCPacketType
 from xrpc.runtime import ExecutionContext
 from xrpc.serde.abstract import SerdeStruct
@@ -348,7 +348,12 @@ class RPCGroupRunner(Terminating, TerminatingHandler):
 
         self.serde = serde
 
-        self.rpcs = rpcs
+        self.rpcs = {k: v for k, v in rpcs.items() if not v.conf.exc}
+
+        self.rpcs_exc = {k: v for k, v in rpcs.items() if v.conf.exc}
+
+        for k, v in self.rpcs_exc.items():
+            self.chan.push_exc(ELExcEntry(v.fn))
 
     def terminate(self):
         self.wait.remove()
@@ -475,7 +480,7 @@ class RPCGroupRunner(Terminating, TerminatingHandler):
         try:
             self.packet_handle(pkt, raw_packet, args, kwargs)
         except Exception as e:
-            #reply_now(RPCReply.internal.value, str(e))
+            # reply_now(RPCReply.internal.value, str(e))
             _log_called_from(logging.getLogger(__name__), 'While receiving the payload [%s %s %s] %s', pkt, args,
                              kwargs, rpc_def)
             self.actor.terminate('ie_' + repr(e))

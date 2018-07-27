@@ -47,6 +47,11 @@ class ELPollEntry:
 
 
 @dataclass
+class ELExcEntry:
+    exc: EVExcHdlr = default_exc_handler
+
+
+@dataclass
 class ELPktEntry:
     matcher: EVPktMatcherFun
     processor: EVPktHdlr
@@ -129,6 +134,7 @@ class EventLoop:
         self.id_ctr = count()
         self.transports: Dict[int, Transport] = {}
         self.stacks: Dict[int, List[Union[ELPollEntry, ELPktEntry]]] = {}
+        self.stacks_exc: Dict[int, List[ELExcEntry]] = {}
         self.waits: Dict[int, ELWaitEntry] = {}
 
     def logger(self, sn=None):
@@ -229,18 +235,32 @@ class EventLoop:
             if max_wait_left is not None and max_wait_left == 0:
                 break
 
-    def recv_connabt(self, transport: Transport, has_data):
-        reader = transport.read(has_data)
+    def recv_connabt(self, idx: int, has_data):
         while True:
+            if idx not in self.transports:
+                return
+
+            transport = self.transports[idx]
+
             try:
+                reader = transport.read(has_data)
                 raw_packet = next(reader)
                 yield raw_packet
             except StopIteration:
                 return
-            except ConnectionAbortedError:
-                self.logger('coabt.r').debug('%s', transport)
-                return
+            except Exception as e:
+                exc_stack = self.stacks_exc[idx]
 
+                for x in exc_stack[::-1]:
+                    fl = x.exc(e)
+
+                    if not fl:
+                        raise
+                    else:
+                        return
+
+                self.logger('coerr').debug('%s %s', e, transport)
+                return
     def recv(self, nonflat_fds: List[Tuple[int, List[socket.socket]]], polled_flags: Optional[List[bool]] = None):
         # we have a set of transports
         # we've got a set of
@@ -292,7 +312,7 @@ class EventLoop:
 
                         stack[-1].processor(has_data)
                 else:
-                    for raw_packet in self.recv_connabt(transport, has_data):
+                    for raw_packet in self.recv_connabt(idx, has_data):
                         packet = RPCPacket.unpack(raw_packet.data)
 
                         log_tr_net_pkt_in.debug('%s %s', raw_packet.addr, packet)
@@ -320,6 +340,9 @@ class EventLoop:
     def push(self, idx: int, entry: ELPktEntry):
         assert len(self.stacks[idx]) == 0 or all(isinstance(x, ELPktEntry) for x in self.stacks[idx]), self.stacks
         self.stacks[idx].append(entry)
+
+    def push_exc(self, idx: int, entry: ELExcEntry):
+        self.stacks_exc[idx].append(entry)
 
     def push_raw(self, idx: int, entry: ELPollEntry):
         assert len(self.stacks[idx]) == 0, self.stacks[idx]
@@ -358,6 +381,7 @@ class EventLoop:
 
         self.transports[new_id] = transport
         self.stacks[new_id] = []
+        self.stacks_exc[new_id] = []
 
         return self.transport(new_id)
 
@@ -366,6 +390,7 @@ class EventLoop:
         r = self.transports[idx]
         del self.transports[idx]
         del self.stacks[idx]
+        del self.stacks_exc[idx]
         return r
 
 
@@ -404,6 +429,9 @@ class ELTransportRef:
 
     def push(self, entry: ELPktEntry):
         return self.parent.push(self.idx, entry)
+
+    def push_exc(self, entry: ELExcEntry):
+        return self.parent.push_exc(self.idx, entry)
 
     def push_raw(self, entry: ELPollEntry):
         return self.parent.push_raw(self.idx, entry)

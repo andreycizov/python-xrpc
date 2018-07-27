@@ -1,5 +1,6 @@
-import datetime
 import socket
+
+import datetime
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Optional, Type, Callable, Dict, List
@@ -46,6 +47,8 @@ class RPCEntrySet(Bindable, Dict[str, RPCEntry]):
         ss = ss | SerdeSet.walk(SERVER_SERDE_INST, Optional[str])
 
         for k, v in self.items():
+            if v.conf.exc:
+                continue
             ssreq = SerdeSet.walk(SERVER_SERDE_INST, v.req)
             ssres = SerdeSet.walk(SERVER_SERDE_INST, v.res)
 
@@ -63,6 +66,10 @@ class RPCEntrySet(Bindable, Dict[str, RPCEntry]):
         for rpc_name, rpc_def in rpcs.items():
             fa = CallableArgsWrapper.from_func_cls(type_, rpc_def.fn, )
             fb = CallableRetWrapper.from_func_cls(type_, rpc_def.fn, )
+
+            if rpc_def.conf.exc:
+                retannot = fb.spec.annotations.get('return')
+                assert retannot == bool, retannot
 
             rpcs_return[rpc_name] = RPCEntry(
                 rpc_name, rpc_def.fn, rpc_def.conf, fa, fb
