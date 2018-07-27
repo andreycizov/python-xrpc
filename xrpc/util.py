@@ -18,6 +18,10 @@ def signal_context(signals=(signal.SIGINT, signal.SIGTERM), handler: Union[int, 
             signal.signal(s, prev_hdlr)
 
 
+ISO8601 = '%Y-%m-%dT%H:%M:%S.%fZ'
+ISO8601_SYMSAFE = '%Y%m%dT%H%M%S%fZ'
+
+
 def time_now() -> datetime:
     return datetime.now(tz=pytz.utc)
 
