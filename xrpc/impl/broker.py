@@ -1,13 +1,9 @@
 import logging
-import logging
-import os
-import tempfile
 from collections import deque
 from contextlib import ExitStack
 from inspect import getfullargspec, ismethod
 from itertools import count
 
-import shutil
 import types
 from argparse import ArgumentParser
 from dataclasses import dataclass
@@ -17,20 +13,20 @@ from subprocess import TimeoutExpired, Popen
 from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple, Union
 
 from xrpc.abstract import MutableInt
+from xrpc.actor import run_server
 from xrpc.cli import Parsable
 from xrpc.client import ClientConfig, build_wrapper
 from xrpc.const import SERVER_SERDE_INST
-from xrpc.dsl import rpc, RPCType, regular, socketio, signal
+from xrpc.dsl import rpc, RPCType, regular, signal, DEFAULT_GROUP
 from xrpc.error import HorizonPassedError, TimeoutError, TerminationException
 from xrpc.logging import logging_config, LoggerSetup, logging_setup, circuitbreaker, cli_main, logging_parser
 from xrpc.loop import EventLoop
 from xrpc.popen import popen
-from xrpc.runtime import service, sender
+from xrpc.runtime import service, sender, origin
 from xrpc.serde.abstract import SerdeSet, SerdeStruct
 from xrpc.serde.types import build_types, ARGS_RET, PairSpec
 from xrpc.service import ServiceDefn
-from xrpc.transport import Origin, Transport, select_helper, \
-    TransportSerde
+from xrpc.transport import Origin, Transport
 from xrpc.util import time_now, signal_context
 
 
@@ -97,7 +93,7 @@ class WorkerEnvelope(Generic[WPT]):
     has_payload: bool = False
 
 
-def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, unix_url: str):
+def worker_inst(logger_config: LoggerSetup, idx: int, fn: WorkerCallable, unix_url: str):
     def sig_handler(code, frame):
         logging.getLogger('worker_inst').error(f'Received {code}')
         raise KeyboardInterrupt('')
@@ -112,39 +108,38 @@ def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, unix_url: str):
         for stack in stacks:
             es.enter_context(stack)
 
-        transport = Transport.from_url(unix_url)
-
         logging.getLogger('worker_inst').error(f'Start %s', unix_url)
 
         # use the callable's type hints in order to serialize and deserialize parameters
 
         cls_req, cls_res = get_func_types(fn)
 
-        cls_req, cls_res = WorkerEnvelope[cls_req], WorkerEnvelope[cls_res]
+        run_server(WorkerInst[cls_req, cls_res], WorkerInst(idx, fn), {DEFAULT_GROUP: unix_url})
 
-        serde = build_serde(cls_req, cls_res)
 
-        channel = TransportSerde(transport, serde, cls_res, cls_req)
+class WorkerInst(Generic[RequestType, ResponseType]):
+    def __init__(self, idx: int, fn: WorkerCallable):
+        self.idx = idx
+        self.fn = fn
+        self.cls_req, self.cls_res = get_func_types(self.fn)
 
-        channel.send(unix_url, WorkerEnvelope())
+    @rpc(RPCType.Durable)
+    def put(self, payload: Optional[RequestType]):
+        ret = self.fn(payload)
 
-        try:
-            while True:
-                flags = select_helper(channel.fds)
+        s = service(Worker[self.cls_req, self.cls_res], origin())
+        s.bk_done(ret)
 
-                for _, x in channel.read():
-                    if x.has_payload:
-                        ret = fn(x.payload)
+    @regular()
+    def announce(self) -> float:
+        s = service(Worker[self.cls_req, self.cls_res], origin())
+        s.bk_announce(self.idx)
 
-                        channel.send(unix_url, WorkerEnvelope(ret, True))
-                    else:
-                        logging.getLogger('worker_inst').error('Unhandled %s', x)
-        except KeyboardInterrupt:
-            logging.getLogger('worker_inst').debug('Mildly inconvenient exit')
-        except ConnectionAbortedError:
-            logging.getLogger('worker_inst').debug('Connection aborted')
-        finally:
-            logging.getLogger('worker_inst').debug('Exit')
+        return 10.
+
+    @signal
+    def exit(self):
+        raise TerminationException()
 
 
 def build_serde(*items) -> SerdeStruct:
@@ -159,6 +154,9 @@ def build_serde(*items) -> SerdeStruct:
             ss = ss.merge(ssi)
 
     return ss.struct(SERVER_SERDE_INST)
+
+
+BACKEND = 'backend'
 
 
 class Worker(Generic[RequestType, ResponseType]):
@@ -189,40 +187,29 @@ class Worker(Generic[RequestType, ResponseType]):
 
         self.fn = fn
 
-        self.dir = None
-        self.dir = tempfile.mkdtemp()
+        self.idx_ctr = count()
+        self.workers: Dict[int, list] = {}
+        self.workers_popen: Dict[int, Popen] = {}
 
-        self.unix_url = 'unix://' + os.path.join(self.dir, 'unix.sock')
-
-        self.transport = Transport.from_url(self.unix_url + '#bind')
-        self.channel = TransportSerde(self.transport, self.serde, self.cls_backend_req, self.cls_backend_res)
-
-        self.inst, self.inst_addr = self.start_worker_inst()
+    def start_worker_inst(self):
+        logging.getLogger(__name__).warning('start_worker_inst')
+        idx = next(self.idx_ctr)
+        r = popen(worker_inst, logging_config(), idx, self.fn, origin(BACKEND))
+        self.workers_popen[idx] = r
 
     def restart_worker_inst(self):
-        self.inst.kill()
-        self.channel.read()
+        for k, v in list(self.workers_popen.items()):
+            v.kill()
+            del self.workers_popen[k]
 
-        self.inst, self.inst_addr = self.start_worker_inst()
+            if k in self.workers:
+                del self.workers[k]
 
-    def start_worker_inst(self) -> Tuple[Popen, Origin]:
-        r = popen(worker_inst, logging_config(), self.fn, self.unix_url)
+        self.start_worker_inst()
 
-        for attempt in count():
-            flags = select_helper(self.channel.fds, 0.5)
-
-            if any(flags):
-                try:
-                    for addr, x in self.channel.read():
-                        assert x.payload is None
-                        return r, addr
-                except ConnectionAbortedError:
-                    pass
-
-            logging.getLogger('main').error('[%s] Could not establish a connection yet', attempt)
-            if attempt >= 5:
-                r.kill()
-                raise ValueError('Could not instantiate a worker')
+    @property
+    def inst(self):
+        return list(self.workers_popen.values())[0]
 
     @rpc()
     def get_assigned(self) -> Optional[ResponseType]:
@@ -231,25 +218,36 @@ class Worker(Generic[RequestType, ResponseType]):
     @rpc(RPCType.Durable)
     def assign(self, pars: RequestType):
         if self.assigned is not None and pars != self.assigned:
-            self.resign()
+            self.resign('assigned')
             return
 
-        self.channel.send(self.inst_addr, WorkerEnvelope(pars, has_payload=True))
+        if len(self.workers) == 0:
+            self.resign('workers')
+            return
 
         self.assigned = pars
-
         self.running_since = time_now()
+
+        try:
+            s = service(WorkerInst[self.cls_req, self.cls_res], list(self.workers.values())[0][0], group=BACKEND)
+            s.put(pars)
+        except TimeoutError:
+            self.resign()
 
     @rpc(RPCType.Repliable)
     def pid(self) -> int:
         return int(self.inst.pid)
 
     @rpc(RPCType.Durable)
-    def resign(self):
-        self.restart_worker_inst()
+    def resign(self, reason: Optional[str] = None):
+        if self.assigned is not None and len(self.workers):
+            self.restart_worker_inst()
+
+        self.assigned = None
+        self.running_since = None
 
         s = service(Broker[self.cls_req, self.cls_res], self.broker_addr)
-        s.resign()
+        s.resign(reason)
 
     def is_killed(self) -> bool:
         try:
@@ -274,30 +272,48 @@ class Worker(Generic[RequestType, ResponseType]):
 
         return self.conf.heartbeat
 
-    @socketio()
-    def bg(self, flags):
+    @rpc(exc=True, group=BACKEND)
+    def backend_exc(self, exc: ConnectionAbortedError) -> bool:
+        # one of the workers had disconnected
+
+        host, reason = exc.args
+        logging.getLogger(__name__).warning('%s %s', host, reason)
+
+        return True
+
+    @rpc(RPCType.Durable, group=BACKEND)
+    def bk_done(self, res: ResponseType):
+        self.assigned = None
+        self.running_since = None
+
+        s = service(Broker[self.cls_req, self.cls_res], self.broker_addr, group=DEFAULT_GROUP)
+
         try:
-            for _, x in self.channel.read(flags):
-                if x.has_payload:
-                    logging.getLogger('main').error('Done %s', x.payload)
-                    self.assigned = None
-                    self.running_since = None
+            s.done(res)
+        except HorizonPassedError:
+            logging.getLogger('bg').exception('Seems like the broker had been killed while I was working')
 
-                    ret = x.payload
+        self.assigned = None
+        self.running_since = None
 
-                    s = service(Broker[self.cls_req, self.cls_res], self.broker_addr,
-                                conf=ClientConfig(timeout_total=None))
+    @rpc(RPCType.Durable, group=BACKEND)
+    def bk_announce(self, idx: int):
+        if idx not in self.workers_popen:
+            logging.getLogger('bk_announce').warning('Stray worker idx: %s', idx)
+            return
 
-                    try:
-                        s.done(ret)
-                    except HorizonPassedError:
-                        logging.getLogger('bg').exception('Seems like the broker had been killed while I was working')
-                else:
-                    logging.getLogger('main').error('Wrong %s', x)
-        except ConnectionAbortedError:
-            self.possibly_killed(True)
+        sdr = sender()
 
-        return self.transport
+        if idx not in self.workers:
+            self.workers[idx] = list()
+
+        self.workers[idx].append(sdr)
+
+    @regular()
+    def bk_workers_lifetime(self) -> float:
+        if len(self.workers_popen) == 0:
+            self.start_worker_inst()
+        return 5.
 
     @regular()
     def metrics(self) -> float:
@@ -309,6 +325,11 @@ class Worker(Generic[RequestType, ResponseType]):
                 self.broker_addr,
             ))
         return self.conf.metrics
+
+    @regular()
+    def ep(self) -> Optional[float]:
+        self.restart_worker_inst()
+        return None
 
     @signal()
     def exit(self):
@@ -323,8 +344,6 @@ class Worker(Generic[RequestType, ResponseType]):
         except TimeoutExpired:
             logging.getLogger('exit').error('Could stop worker graciously')
             self.inst.kill()
-        if self.dir:
-            shutil.rmtree(self.dir)
 
         raise TerminationException()
 
@@ -508,15 +527,15 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
         self.worker_done(sender())
 
     @rpc(RPCType.Durable)
-    def resign(self):
+    def resign(self, reason: Optional[str] = None):
         k = sender()
 
         if k in self.workers_jobs:
             self.job_resign(k)
-            logging.getLogger('resign').debug('Resigned %s %s %s %s', k, self.jobs, self.jobs_pending,
+            logging.getLogger('resign').debug('Resigned %s %s %s %s %s', reason, k, self.jobs, self.jobs_pending,
                                               self.workers_jobs)
         else:
-            logging.getLogger('resign').error('Unknown %s', k)
+            logging.getLogger('resign').error('Unknown %s %s', reason, k)
 
         self.jobs_try_assign()
 

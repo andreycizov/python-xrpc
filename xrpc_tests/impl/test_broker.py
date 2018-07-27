@@ -9,13 +9,13 @@ from time import sleep
 from typing import Dict, Optional
 
 from xrpc.client import ClientConfig, client_transport
-from xrpc.dsl import RPCType, rpc, regular, signal
+from xrpc.dsl import RPCType, rpc, regular, signal, DEFAULT_GROUP
 from xrpc.error import TerminationException
-from xrpc.impl.broker import Broker, Worker, BrokerConf, MetricCollector, NodeMetric, WorkerMetric
+from xrpc.impl.broker import Broker, Worker, BrokerConf, MetricCollector, NodeMetric, WorkerMetric, BACKEND
 from xrpc.logging import LoggerSetup, LL
 from xrpc.popen import wait_all
 from xrpc.util import time_now
-from xrpc_tests.mp.abstract import ProcessHelperCase, server_main, DEFAULT_LEVEL
+from xrpc_tests.mp.abstract import ProcessHelperCase, server_main, DEFAULT_LEVEL, server_main_new
 
 
 @dataclass(eq=True, frozen=True)
@@ -111,7 +111,7 @@ def run_broker(broker_addr, conf, res_addr=None, url_metrics=None):
     return Broker[Request, Response], rpc
 
 
-def run_worker(addr, conf, broker_addr, url_metrics=None, worker_fun=None):
+def run_worker(conf, broker_addr, url_metrics=None, worker_fun=None):
     if worker_fun is None:
         worker_fun = worker_function
     rpc = Worker(Request, Response, conf, broker_addr, worker_fun, url_metrics)
@@ -132,6 +132,7 @@ class TestBroker(ProcessHelperCase):
             LL('xrpc.generic', logging.ERROR),
             LL('xrpc.serde', logging.ERROR),
             LL('xrpc.tr.n.r', logging.INFO),
+            LL('xrpc.tr.n.r.e', logging.DEBUG),
             LL('xrpc.tr.n.s', logging.INFO),
             LL('xrpc.loop', logging.INFO),
         ], ['stream:///stderr'])
@@ -143,7 +144,10 @@ class TestBroker(ProcessHelperCase):
         w_addr = 'udp://127.0.0.1'
 
         brpo = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr, None)
-        wrpo = self.ps.popen(server_main, run_worker, w_addr, conf, broker_addr)
+        wrpo = self.ps.popen(server_main_new, run_worker, {
+            DEFAULT_GROUP: w_addr,
+            BACKEND: 'unix://#bind'
+        }, conf, broker_addr)
         repo = self.ps.popen(server_main, run_results, res_addr)
 
         with self.ps.timer(5.) as tr, client_transport(
@@ -175,7 +179,10 @@ class TestBroker(ProcessHelperCase):
         w_addr = 'udp://127.0.0.1'
 
         a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr, None)
-        b = self.ps.popen(server_main, run_worker, w_addr, conf, broker_addr)
+        b = self.ps.popen(server_main_new, run_worker, {
+            DEFAULT_GROUP: w_addr,
+            BACKEND: 'unix://#bind'
+        }, conf, broker_addr)
         c = self.ps.popen(server_main, run_results, res_addr)
 
         with self.ps.timer(5.) as tr, client_transport(
@@ -209,7 +216,10 @@ class TestBroker(ProcessHelperCase):
         w_addr = 'udp://127.0.0.1:54548'
 
         a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr, None)
-        b = self.ps.popen(server_main, run_worker, w_addr, conf, broker_addr)
+        b = self.ps.popen(server_main_new, run_worker, {
+            DEFAULT_GROUP: w_addr,
+            BACKEND: 'unix://#bind'
+        }, conf, broker_addr)
         c = self.ps.popen(run_results, res_addr)
 
         logging.getLogger(__name__).warning('A')
@@ -253,7 +263,10 @@ class TestBroker(ProcessHelperCase):
             self.step()
 
             a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr=None, url_metrics=metric_addr)
-            b = self.ps.popen(server_main, run_worker, w_addr, conf, broker_addr,
+            b = self.ps.popen(server_main_new, run_worker, {
+                DEFAULT_GROUP: w_addr,
+                BACKEND: 'unix://#bind'
+            }, conf, broker_addr,
                               worker_fun=worker_function_sleeper,
                               url_metrics=metric_addr)
             c = self.ps.popen(server_main, run_metrics, metric_addr)
@@ -303,7 +316,10 @@ class TestBroker(ProcessHelperCase):
             w_addr_2 = 'udp://127.0.0.1'
 
             a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr=None, url_metrics=metric_addr)
-            b = self.ps.popen(server_main, run_worker, w_addr, conf, broker_addr,
+            b = self.ps.popen(server_main_new, run_worker, {
+                DEFAULT_GROUP: w_addr,
+                BACKEND: 'unix://#bind'
+            }, conf, broker_addr,
                               worker_fun=worker_function_resign,
                               url_metrics=metric_addr)
             c = self.ps.popen(server_main, run_metrics, metric_addr)
