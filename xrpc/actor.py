@@ -100,7 +100,11 @@ class RegularRunner(Terminating, TerminatingHandler):
             with self.exc_ctx(reg_def):
                 self.states_regulars[name] = None
                 x: float = self.actor.ctx().exec('reg', reg_def.fn)
-                self.states_regulars[name] = time_now() + timedelta(seconds=x)
+
+                if x is not None:
+                    self.states_regulars[name] = time_now() + timedelta(seconds=x)
+                else:
+                    self.states_regulars[name] = None
 
 
 class SocketIORunner(Terminating, TerminatingHandler):

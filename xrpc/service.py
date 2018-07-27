@@ -69,7 +69,7 @@ class RPCEntrySet(Bindable, Dict[str, RPCEntry]):
 
             if rpc_def.conf.exc:
                 retannot = fb.spec.annotations.get('return')
-                assert retannot == bool, retannot
+                assert retannot == bool, (rpc_def.fn, retannot)
 
             rpcs_return[rpc_name] = RPCEntry(
                 rpc_name, rpc_def.fn, rpc_def.conf, fa, fb
