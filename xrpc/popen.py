@@ -70,6 +70,14 @@ class PopenStruct:
 
 
 def popen(fn, *args, **kwargs) -> subprocess.Popen:
+    """
+    Please ensure you're not killing the process before it had started properly
+    :param fn:
+    :param args:
+    :param kwargs:
+    :return:
+    """
+
     args = [
         sys.executable,
         '-m',
