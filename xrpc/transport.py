@@ -297,7 +297,7 @@ class UnixTransport(UDPTransport):
 
         if should_bind:
             self._fd_bind = sock
-            log_tr_net_meta_in.debug('Bind `%s`', parsed.path)
+            log_tr_net_meta_in.debug('Bind `%s`', self._path)
             sock.bind(self._path)
             sock.listen(5)
 
@@ -350,7 +350,7 @@ class UnixTransport(UDPTransport):
         addr = _norm_addr(addr)
 
         if addr not in self._fd_clients:
-            log_tr_net_raw_err.debug('Drop %s', addr)
+            log_tr_net_raw_err.error('Drop %s %s %s', self, addr, packet)
             return
 
         sock = self._fd_clients[addr]
