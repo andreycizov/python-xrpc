@@ -1,7 +1,7 @@
 from xrpc.serde import types
 from xrpc.serde.abstract import SerdeInst
 
-SERVER_SERDE_INST = SerdeInst([
+SERVER_SERDE_ITEMS = [
     types.NoneSerde(),
     types.TypeVarSerde(),
     types.CallableArgsSerde(),
@@ -19,4 +19,5 @@ SERVER_SERDE_INST = SerdeInst([
     types.DataclassSerde(),
     types.NamedTupleSerde(),
     types.TupleSerde(),
-])
+]
+SERVER_SERDE_INST = SerdeInst(SERVER_SERDE_ITEMS)

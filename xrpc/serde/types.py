@@ -246,6 +246,39 @@ class AtomSerde(SerdeType):
         return SerdeNode(t, [])
 
 
+class WalkableAtomObjDeserializer(SerdeTypeSerializer):
+    def __init__(self, parent: 'SerdeType', t: Any, deps: List[SER]):
+        super().__init__(parent, t, deps)
+
+    def __call__(self, val: Any) -> Union[list, dict]:
+        return val
+
+
+class WalkableAtomObjSerializer(SerdeTypeSerializer):
+    def __init__(self, parent: 'SerdeType', t: Any, deps: List[SER]):
+        super().__init__(parent, t, deps)
+
+    def __call__(self, val: Any) -> Union[list, dict]:
+        return val
+
+
+class WalkableAtomObjSerde(SerdeType):
+    ATOMS = (list, dict)
+
+    cls_deserializer = WalkableAtomObjDeserializer
+    cls_serializer = WalkableAtomObjSerializer
+
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
+        r = any(isinstance(t, x) for x in self.ATOMS)
+        r = r or any(issubclass(t, x) for x in self.ATOMS)
+        return r
+
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        z = ([x for x in self.ATOMS if isinstance(t, x)] + [t for x in self.ATOMS if issubclass(t, x)])[0]
+
+        return SerdeNode(z, [])
+
+
 class BytesDeserializer(SerdeTypeDeserializer):
     def __call__(self, val: Union[list, dict, str]) -> Any:
         return base64.b64decode(val.encode())
@@ -418,8 +451,69 @@ class TupleSerde(SerdeType):
         return SerdeNode(t, [x for x in t.__args__], ctx=ctx)
 
 
+@dataclass(eq=True, frozen=True)
+class AnyObjCls:
+    pass
+
+
+AnyObj = AnyObjCls()
+
+
+class AnySerde(SerdeType):
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
+        if inspect.isclass(t):
+            try:
+                return issubclass(t, Any)
+            except TypeError:
+                return True
+        else:
+            try:
+                return isinstance(t, Any)
+            except TypeError:
+                return True
+
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        t = t if inspect.isclass(t) else t.__class__
+
+        return SerdeNode(t, [])
+
+    def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
+        def deser_any(val):
+            return val
+
+        return deser_any
+
+    def serializer(self, t: Any, deps: List[SER]) -> SER:
+        def ser_any(val):
+            return val
+
+        return ser_any
+
+
+class TypeSerde(SerdeType):
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
+        return isinstance(t, type)
+
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        return SerdeNode((type, t), [])
+
+    def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
+        def deser_dict(val):
+            return str(val)
+
+        return deser_dict
+
+    def serializer(self, t: Any, deps: List[SER]):
+        def deser_dict(val):
+            return str(val)
+
+        return deser_dict
+
+
 class DictSerde(SerdeType):
     def match(self, t: Any, ctx: SerdeStepContext) -> bool:
+        t, _ = _build_generic_context(t, ctx)
+
         if sys.version_info >= (3, 7):
             is_gen = hasattr(t, '__origin__')
 
@@ -455,7 +549,22 @@ class DictSerde(SerdeType):
     def serializer(self, t: Any, deps: List[SER]) -> SER:
         def ser_dict(val):
             ks, vs = deps
-            return {ks(k): vs(v) for k, v in val.items()}
+            r = {}
+            k, v = None, None
+            try:
+                print('zfs', val)
+                for k, v in val.items():
+                    # either way (even if a field is non-optional), that field must not accept None as it's argument
+                    ksk = ks(k)
+                    vsv = vs(v)
+
+                    print(ksk, vsv)
+                    r[ksk] = vsv
+                    # r[f] = self.deps[i](val[f])
+            except (TypeError, Exception) as e:
+                raise SerdeException(val, 'u_sf', idx=k, field=v, par=e)
+
+            return r
 
         return ser_dict
 

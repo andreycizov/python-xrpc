@@ -211,15 +211,18 @@ class SerdeSet:
         for t, deps in sers_pre.items():
             sers[t] = i.serializer(t, deps)
 
-        for n, (t, deps) in zip(self.items, desers_pre.items()):
-            assert len(n.deps) == len(deps), (n.deps, deps)
-            for dt, i in zip(n.deps, range(len(deps))):
-                deps[i] = desers[dt]
+        try:
+            for n, (t, deps) in zip(self.items, desers_pre.items()):
+                assert len(n.deps) == len(deps), (n.deps, deps)
+                for dt, i in zip(n.deps, range(len(deps))):
+                    deps[i] = desers[dt]
 
-        for n, (t, deps) in zip(self.items, sers_pre.items()):
-            assert len(n.deps) == len(deps), (n.deps, deps)
-            for dt, i in zip(n.deps, range(len(deps))):
-                deps[i] = sers[dt]
+            for n, (t, deps) in zip(self.items, sers_pre.items()):
+                assert len(n.deps) == len(deps), (n.deps, deps)
+                for dt, i in zip(n.deps, range(len(deps))):
+                    deps[i] = sers[dt]
+        except KeyError:
+            raise ValueError(f'{desers} {sers}')
 
         return SerdeStruct(desers, sers)
 
