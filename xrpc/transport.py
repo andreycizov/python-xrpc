@@ -265,6 +265,9 @@ def _insert_ordered(insert_to, insert_val, insert_item, ord_col, cmp_fn=lambda x
 
 class UnixTransport(UDPTransport):
     def __init__(self, url, buffer_size=2 ** 24):
+        # todo implement multi-server client transport by connecting when sending
+        # todo how do we handle gc'ing of the conns ?
+
         Transport.__init__(self, url)
 
         self.buffer_size = buffer_size
