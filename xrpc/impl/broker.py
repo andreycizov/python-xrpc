@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from signal import SIGTERM
 from subprocess import TimeoutExpired, Popen
-from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple, Union
+from typing import NamedTuple, Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple, Union, List
 
 from xrpc.abstract import MutableInt
 from xrpc.actor import run_server
@@ -188,28 +188,29 @@ class Worker(Generic[RequestType, ResponseType]):
         self.fn = fn
 
         self.idx_ctr = count()
-        self.workers: Dict[int, list] = {}
-        self.workers_popen: Dict[int, Popen] = {}
+        #self.workers: Dict[str, Optional[JobID]] = {
+        self.worker_addrs: Dict[int, List[str]] = {}
+        self.worker_pids: Dict[int, Popen] = {}
 
     def start_worker_inst(self):
         logging.getLogger(__name__).warning('start_worker_inst')
         idx = next(self.idx_ctr)
         r = popen(worker_inst, logging_config(), idx, self.fn, origin(BACKEND))
-        self.workers_popen[idx] = r
+        self.worker_pids[idx] = r
 
     def restart_worker_inst(self):
-        for k, v in list(self.workers_popen.items()):
+        for k, v in list(self.worker_pids.items()):
             v.kill()
-            del self.workers_popen[k]
+            del self.worker_pids[k]
 
-            if k in self.workers:
-                del self.workers[k]
+            if k in self.worker_addrs:
+                del self.worker_addrs[k]
 
         self.start_worker_inst()
 
     @property
     def inst(self):
-        return list(self.workers_popen.values())[0]
+        return list(self.worker_pids.values())[0]
 
     @rpc()
     def get_assigned(self) -> Optional[ResponseType]:
@@ -221,7 +222,7 @@ class Worker(Generic[RequestType, ResponseType]):
             self.resign('assigned')
             return
 
-        if len(self.workers) == 0:
+        if len(self.worker_addrs) == 0:
             self.resign('workers')
             return
 
@@ -229,7 +230,7 @@ class Worker(Generic[RequestType, ResponseType]):
         self.running_since = time_now()
 
         try:
-            s = service(WorkerInst[self.cls_req, self.cls_res], list(self.workers.values())[0][0], group=BACKEND)
+            s = service(WorkerInst[self.cls_req, self.cls_res], list(self.worker_addrs.values())[0][0], group=BACKEND)
             s.put(pars)
         except TimeoutError:
             self.resign()
@@ -240,7 +241,7 @@ class Worker(Generic[RequestType, ResponseType]):
 
     @rpc(RPCType.Durable)
     def resign(self, reason: Optional[str] = None):
-        if self.assigned is not None and len(self.workers):
+        if self.assigned is not None and len(self.worker_addrs):
             self.restart_worker_inst()
 
         self.assigned = None
@@ -298,20 +299,20 @@ class Worker(Generic[RequestType, ResponseType]):
 
     @rpc(RPCType.Durable, group=BACKEND)
     def bk_announce(self, idx: int):
-        if idx not in self.workers_popen:
+        if idx not in self.worker_pids:
             logging.getLogger('bk_announce').warning('Stray worker idx: %s', idx)
             return
 
         sdr = sender()
 
-        if idx not in self.workers:
-            self.workers[idx] = list()
+        if idx not in self.worker_addrs:
+            self.worker_addrs[idx] = list()
 
-        self.workers[idx].append(sdr)
+        self.worker_addrs[idx].append(sdr)
 
     @regular()
     def bk_workers_lifetime(self) -> float:
-        if len(self.workers_popen) == 0:
+        if len(self.worker_pids) == 0:
             self.start_worker_inst()
         return 5.
 
