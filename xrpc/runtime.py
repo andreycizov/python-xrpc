@@ -90,9 +90,9 @@ def cache_get(obj: Type[T]) -> ServiceDefn:
     return cache[obj]
 
 
-def origin() -> Origin:
+def origin(chan=None) -> Origin:
     ctx = context()
-    return ctx.el.transport(ctx.chans[ctx.chan_def]).origin
+    return ctx.el.transport(ctx.chans[chan or ctx.chan_def]).origin
 
 
 def sender() -> Origin:
