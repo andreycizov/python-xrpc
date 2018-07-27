@@ -38,6 +38,14 @@ class Packet:
     addr: Origin
     data: bytes
 
+    def __repr__(self):
+        txt = repr(self.data[:12])
+
+        if len(self.data) > 12:
+            txt += '~'
+
+        return f'{self.__class__.__name__}({self.addr}. {txt})'
+
     def pack(self) -> bytes:
         body = self.data
 
