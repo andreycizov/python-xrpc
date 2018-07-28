@@ -1,3 +1,4 @@
+import gc
 import inspect
 import logging
 
@@ -37,9 +38,12 @@ def _get_caller(depth=2) -> inspect.FrameInfo:
 def trc(postfix: Optional[str] = None) -> logging.Logger:
     x = _get_caller()
 
+    code = inspect.currentframe().f_back.f_code
+    func = [obj for obj in gc.get_referrers(code) if inspect.isfunction(obj)][0]
+
     mod = inspect.getmodule(x.frame)
 
-    parts = (mod.__name__, x.function)
+    parts = (mod.__name__, func.__qualname__)
 
     if postfix:
         parts += (postfix,)
