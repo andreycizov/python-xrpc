@@ -1,4 +1,7 @@
+import inspect
 import logging
+
+from typing import Optional
 
 log_tr = logging.getLogger('xrpc.tr')
 
@@ -25,3 +28,22 @@ log_tr_net_meta_in = log_tr.getChild('n.m.i')
 log_tr_net_meta_out = log_tr.getChild('n.m.o')
 
 
+def _get_caller(depth=2) -> inspect.FrameInfo:
+    """Get caller frame"""
+    caller = inspect.stack()[depth]
+    return caller
+
+
+def trc(postfix: Optional[str] = None) -> logging.Logger:
+    x = _get_caller()
+
+    mod = inspect.getmodule(x.frame)
+
+    parts = (mod.__name__, x.function)
+
+    if postfix:
+        parts += (postfix,)
+
+    logger_name = '.'.join(parts)
+
+    return logging.getLogger(logger_name)
