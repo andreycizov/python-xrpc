@@ -1,19 +1,19 @@
 import logging
 import os
 import select
+import shutil
 import socket
 import struct
 import tempfile
+from typing import Iterable, Dict, NamedTuple, Type, List, Optional, TypeVar, Generic, Tuple
 from urllib.parse import ParseResult, urlparse, urlunparse
 
-import shutil
 from dataclasses import dataclass
-from typing import Iterable, Dict, NamedTuple, Type, List, Optional, TypeVar, Generic, Tuple
 
 from xrpc.net import json_pack, json_unpack, RPCPacket
 from xrpc.serde.abstract import SerdeStruct
 from xrpc.trace import log_tr_net_raw_out, log_tr_net_raw_err, log_tr_net_raw_in, log_tr_net_meta_out, \
-    log_tr_net_meta_in, log_tr_net_obj_out, log_tr_net_obj_in, log_tr_net_sel_err, log_tr_net_sel_in
+    log_tr_net_meta_in, log_tr_net_obj_out, log_tr_net_obj_in, log_tr_net_sel_err, log_tr_net_sel_in, trc
 
 Origin = str
 
@@ -111,6 +111,8 @@ class Transport:
     @classmethod
     def from_url(cls, url) -> 'Transport':
         parsed: ParseResult = urlparse(url)
+
+        trc().debug('%s %s', url, parsed)
 
         if parsed.scheme in TRANSPORT_MAP:
             return TRANSPORT_MAP[parsed.scheme](url)
