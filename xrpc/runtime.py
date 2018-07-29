@@ -1,9 +1,10 @@
+import threading
+from typing import Optional, Callable, Dict, TypeVar, Type, Any, List, Union
 from urllib.parse import urlparse, ParseResult, urlunparse, urlencode, parse_qsl
 
-import threading
 from dataclasses import dataclass
-from typing import Optional, Callable, Dict, TypeVar, Type, Any, List
 
+import xrpc
 from xrpc.client import ClientConfig, ServiceWrapper
 from xrpc.loop import EventLoop
 from xrpc.service import ServiceDefn
@@ -17,7 +18,7 @@ CACHE_NAME = 'rpc_cache'
 
 @dataclass
 class ExecutionContext:
-    actor: 'Actor'
+    actor: 'xrpc.actor.Actor'
     el: EventLoop
     chans: Dict[str, int]
     """Channels of `el` available in this context by these names"""
@@ -107,6 +108,14 @@ def reply(ret: Any):
     assert reply is not None, 'reply() can only be called in RPC functions'
 
     reply(ret)
+
+
+def reset(name: Union[Callable, str], new_val: float):
+    if callable(name):
+        name = name.__name__
+
+    reg: xrpc.actor.RegularRunner = context().actor.get('regular')
+    reg.reset(name, new_val)
 
 
 TA = TypeVar('TA')

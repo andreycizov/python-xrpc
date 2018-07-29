@@ -1,7 +1,6 @@
-from enum import Enum
-
 import signal as signalz
-from typing import NamedTuple, Tuple
+from enum import Enum
+from typing import NamedTuple, Tuple, Optional
 
 
 class RPCType(Enum):
@@ -46,7 +45,7 @@ class rpc(NamedTuple):
 
 
 class regular(NamedTuple):
-    initial: float = 0.
+    initial: Optional[float] = 0.
     """Initial wait time in seconds"""
     tick: bool = False
     """Run this function on every tick (this should affect the wait times)"""

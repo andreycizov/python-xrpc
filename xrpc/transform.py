@@ -1,6 +1,5 @@
 import sys
 from inspect import getfullargspec
-
 from typing import Dict, Any, Tuple, Callable, NamedTuple, Optional
 
 from xrpc.dsl import ATTR_RPC, ATTR_REGULAR, rpc, regular, signal, ATTR_SIGNAL, ATTR_STARTUP, startup, \
@@ -41,7 +40,7 @@ def get_regular(x) -> Dict[str, RegularConf]:
         argspec = getfullargspec(attr)
         rtn_type = argspec.annotations.get('return', None)
 
-        assert rtn_type in [float, int, Optional[int], Optional[float]], f'Incorrect return type for {n}: {rtn_type}'
+        assert rtn_type in [float, int, Optional[int], Optional[float], None], f'Incorrect return type for {n}: {rtn_type}'
         r[n] = RegularConf(x, attr)
 
     return r

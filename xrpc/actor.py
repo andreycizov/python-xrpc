@@ -1,14 +1,14 @@
 import contextlib
 import logging
 import os
-from itertools import count
-from tempfile import mkdtemp
-
 import shutil
-from dataclasses import dataclass
 from datetime import timedelta, datetime
 from functools import partial
+from itertools import count
+from tempfile import mkdtemp
 from typing import List, Dict, Optional, Callable, Any, ContextManager
+
+from dataclasses import dataclass
 
 from xrpc.dict import RPCLogDict
 from xrpc.dsl import RPCType, DEFAULT_GROUP
@@ -69,7 +69,8 @@ class RegularRunner(Terminating, TerminatingHandler):
         self.regulars = regulars
 
         self.states_regulars: Dict[str, Optional[datetime]] = {
-            k: time_now() + timedelta(seconds=x.conf.initial) for k, x in self.regulars.items()
+            k: time_now() + timedelta(seconds=x.conf.initial) if x.conf.initial else None for k, x in
+        self.regulars.items()
         }
 
         # if we make sure that max_wait is called for every execution of select_
@@ -77,6 +78,13 @@ class RegularRunner(Terminating, TerminatingHandler):
 
     def terminate(self):
         self.wait.remove()
+
+    def reset(self, name: str, new_val: float):
+        assert isinstance(new_val, (float, int, None.__class__)), new_val
+
+        step_time = time_now()
+
+        self.states_regulars[name] = step_time + timedelta(seconds=new_val)
 
     @property
     def max_poll_regulars(self):
@@ -501,6 +509,8 @@ class Actor(Terminating, LoggingActor):
 
         self.idx_ctr = count()
         self.terms: Dict[int, Terminating] = {}
+        self.names_terms: Dict[str, int] = {}
+        self.terms_names: Dict[int, str] = {}
         self.chans: Dict[str, int] = {}
 
     def add_transport(self, group: str, url: str) -> ELTransportRef:
@@ -512,13 +522,27 @@ class Actor(Terminating, LoggingActor):
 
         return tref
 
-    def add(self, item: Terminating) -> int:
+    def get(self, name) -> Terminating:
+        return self.terms[self.names_terms[name]]
+
+    def add(self, item: Terminating, name: Optional[str] = None) -> int:
         new_idx = next(self.idx_ctr)
         self.terms[new_idx] = item
+
+        if name is not None:
+            assert name not in self.names_terms, (self.names_terms, name)
+            self.names_terms[name] = new_idx
+            self.terms_names[new_idx] = name
+
         return new_idx
 
     def remove(self, idx: int):
         del self.terms[idx]
+
+        if idx in self.terms_names:
+            name = self.terms_names[idx]
+            del self.terms_names[idx]
+            del self.names_terms[name]
 
     def terminate(self, why=None):
         self.logger('term').debug('Terminating %s %s', why, self)
@@ -595,7 +619,7 @@ def actor_create(
     regr = RegularRunner(act, el, regs)
     sior = SocketIORunner(act, el, sios)
 
-    act.add(regr)
+    act.add(regr, 'regular')
     act.add(sior)
 
     act.add(sr.add(act, sigs.to_signal_map()))
