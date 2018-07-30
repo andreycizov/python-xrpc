@@ -1,8 +1,8 @@
 import heapq
-from collections import deque
-
 from datetime import datetime
-from typing import TypeVar, Generic, List, Optional, Deque
+from typing import TypeVar, Generic, List, Optional, Dict, Tuple, Callable, Type
+
+from collections import deque
 
 from xrpc.util import time_now
 
@@ -50,41 +50,43 @@ class MutableDateTime:
         return r
 
 
-T = TypeVar('T')
-H = TypeVar('H')
+V = TypeVar('T')
+K = TypeVar('K')
 
 
-class Queue(Generic[T, H]):
-    def __init__(self, initial: Optional[List[T]] = None):
-        self.h: H = self._init(initial)
-
+class Queue(Generic[V]):
     def copy(self) -> 'Queue':
-        return self.__class__(self.h)
+        raise NotImplementedError()
+
+    def __len__(self):
+        raise NotImplementedError()
+
+    def push(self, val: V):
+        raise NotImplementedError()
+
+    def pop(self) -> V:
+        raise NotImplementedError()
+
+    def peek(self) -> Optional[V]:
+        raise NotImplementedError()
+
+
+class BinaryQueue(Queue[V]):
+    def __init__(self, initial: Optional[List[V]] = None):
+        if initial:
+            self.h = deque(sorted(initial))
+        else:
+            self.h = deque()
 
     def __len__(self):
         return len(self.h)
 
-    def _init(self, initial: List[T]) -> H:
-        raise NotImplementedError()
+    def copy(self) -> 'Queue':
+        bq = BinaryQueue()
+        bq.h = deque(self.h)
+        return bq
 
-    def push(self, val: T):
-        raise NotImplementedError()
-
-    def pop(self) -> T:
-        raise NotImplementedError()
-
-    def peek(self) -> Optional[T]:
-        raise NotImplementedError()
-
-
-class BinaryQueue(Queue[T, Deque[T]]):
-    def _init(self, initial: Optional[List[T]]) -> Deque[T]:
-        if initial:
-            return deque(sorted(initial))
-        else:
-            return deque()
-
-    def push(self, val: T):
+    def push(self, val: V):
         if len(self.h) == 0:
             self.h.append(val)
             return
@@ -123,40 +125,132 @@ class BinaryQueue(Queue[T, Deque[T]]):
                 self.h.insert(min_idx + 1, val)
             return
 
-    def pop(self) -> T:
+    def pop(self) -> V:
         r = self.h.popleft()
         return r
 
-    def peek(self) -> Optional[T]:
+    def peek(self) -> Optional[V]:
         if len(self.h):
             return self.h[0]
         else:
             return None
 
 
-class HeapQueue(Queue[T, List[T]]):
-    def _init(self, initial: Optional[List[T]]) -> List[T]:
+class HeapQueue(Queue[V]):
+    def __init__(self, initial: Optional[List[V]] = None):
         if initial:
-            initial = list(initial)
-            heapq.heapify(initial)
-            return initial
+            self.h = list(initial)
+            heapq.heapify(self.h)
         else:
-            return []
+            self.h = []
 
-    def push(self, val: T):
+    def __len__(self):
+        return len(self.h)
+
+    def copy(self) -> 'Queue':
+        hq = HeapQueue()
+        hq.h = list(self.h)
+        return hq
+
+    def push(self, val: V):
         heapq.heappush(self.h, val)
 
-    def pop(self) -> T:
+    def pop(self) -> V:
         return heapq.heappop(self.h)
 
-    def peek(self) -> Optional[T]:
+    def peek(self) -> Optional[V]:
         if len(self.h):
             return self.h[0]
         else:
             return None
 
-    def pushpop(self, val: T):
+    def pushpop(self, val: V):
         return heapq.heappushpop(self.h, val)
 
-    def replace(self, val: T):
+    def replace(self, val: V):
         return heapq.heapreplace(self.h, val)
+
+
+Ord = TypeVar('Ord')
+
+
+class KeyedQueue(Generic[Ord, K, V], Queue[V]):
+    def __init__(self,
+                 initial: Optional[List[V]] = None,
+                 *,
+                 ord: Callable[[V], Ord] = lambda x: x,
+                 key: Callable[[V], K] = lambda x: x,
+                 q_cls: Type[Queue] = HeapQueue
+                 ):
+        self.ord_fn = ord
+        self.key_fn = key
+
+        self.next_ctr: Dict[K, int] = {}
+        self.values: Dict[K, V] = {}
+
+        self.q: Queue[Tuple[Ord, K, int]] = q_cls()
+
+        if initial:
+            for x in initial:
+                self.push(x)
+
+    def __len__(self):
+        return len(self.values)
+
+    def copy(self):
+        khq = KeyedQueue(self.ord_fn, self.key_fn)
+        khq.next_ctr = dict(self.next_ctr)
+        khq.values = dict(self.values)
+        khq.q = self.q.copy()
+        return khq
+
+    def push(self, val: V):
+        key = self.key_fn(val)
+        ord_ = self.ord_fn(val)
+
+        if key not in self.next_ctr:
+            self.next_ctr[key] = 0
+
+        idx = self.next_ctr[key]
+        self.next_ctr[key] += 1
+
+        self.values[key] = val
+
+        self.q.push((ord_, key, idx))
+
+    def pop(self) -> V:
+        while True:
+            ord_, key, idx = self.q.pop()
+
+            if key not in self.values:
+                continue
+
+            if self.next_ctr[key] - 1 != idx:
+                continue
+
+            del self.next_ctr[key]
+            return_ = self.values[key]
+            del self.values[key]
+
+            return return_
+
+    def peek(self) -> Optional[V]:
+        while True:
+            val = self.q.peek()
+
+            if val is None:
+                return None
+
+            ord_, key, idx = val
+
+            if key not in self.values:
+                self.q.pop()
+                continue
+
+            if self.next_ctr[key] -1 != idx:
+                self.q.pop()
+                continue
+
+            return self.values[key]
+
+
