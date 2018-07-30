@@ -188,6 +188,7 @@ class KeyedQueue(Generic[Ord, K, V], Queue[V]):
         self.next_ctr: Dict[K, int] = {}
         self.values: Dict[K, V] = {}
 
+        self.q_cls = q_cls
         self.q: Queue[Tuple[Ord, K, int]] = q_cls()
 
         if initial:
@@ -197,8 +198,14 @@ class KeyedQueue(Generic[Ord, K, V], Queue[V]):
     def __len__(self):
         return len(self.values)
 
+    def __delitem__(self, key: K):
+        del self.values[key]
+
+    def __contains__(self, key: K):
+        return key in self.values
+
     def copy(self):
-        khq = KeyedQueue(self.ord_fn, self.key_fn)
+        khq = KeyedQueue(ord=self.ord_fn, key=self.key_fn, q_cls=self.q_cls)
         khq.next_ctr = dict(self.next_ctr)
         khq.values = dict(self.values)
         khq.q = self.q.copy()
@@ -247,10 +254,8 @@ class KeyedQueue(Generic[Ord, K, V], Queue[V]):
                 self.q.pop()
                 continue
 
-            if self.next_ctr[key] -1 != idx:
+            if self.next_ctr[key] - 1 != idx:
                 self.q.pop()
                 continue
 
             return self.values[key]
-
-

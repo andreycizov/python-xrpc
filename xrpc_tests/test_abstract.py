@@ -87,45 +87,68 @@ class TestStruct(unittest.TestCase):
 
             with self.subTest(str(sq_cls)):
                 with self.subTest('queue_001'):
-                    q = q_cls(a1, ord_fn=ord_fn, key_fn=key_fn, q_cls=sq_cls)
+                    q = q_cls(a1, ord=ord_fn, key=key_fn, q_cls=sq_cls)
                     q.push((len(a1), 2))
                     self.assertEqual([1, 2, 2, 2, 3, 3, 3], [ord_fn(x) for x in ex(q)])
 
                 with self.subTest('queue_002'):
-                    q = q_cls(a2, ord_fn=ord_fn, key_fn=key_fn, q_cls=sq_cls)
+                    q = q_cls(a2, ord=ord_fn, key=key_fn, q_cls=sq_cls)
                     q.push((len(a2), 2))
                     self.assertEqual([1, 2, 2, 3, 3, 3], [ord_fn(x) for x in ex(q)], )
 
                 with self.subTest('queue_003'):
-                    q = q_cls(a2, ord_fn=ord_fn, key_fn=key_fn, q_cls=sq_cls)
+                    q = q_cls(a2, ord=ord_fn, key=key_fn, q_cls=sq_cls)
                     q.push((len(a2), 0))
                     self.assertEqual([0, 1, 2, 3, 3, 3], [ord_fn(x) for x in ex(q)], )
 
                 with self.subTest('queue_004'):
-                    q = q_cls(a2, ord_fn=ord_fn, key_fn=key_fn, q_cls=sq_cls)
+                    q = q_cls(a2, ord=ord_fn, key=key_fn, q_cls=sq_cls)
                     q.push((len(a2), 4))
                     self.assertEqual([1, 2, 3, 3, 3, 4], [ord_fn(x) for x in ex(q)], )
 
                 with self.subTest('queue_005'):
-                    q = q_cls(a3, ord_fn=ord_fn, key_fn=key_fn, q_cls=sq_cls)
+                    q = q_cls(a3, ord=ord_fn, key=key_fn, q_cls=sq_cls)
                     q.push((len(a3), 4))
                     self.assertEqual([4], [ord_fn(x) for x in ex(q)])
 
                 with self.subTest('queue_006'):
-                    q = q_cls(a4, ord_fn=ord_fn, key_fn=key_fn, q_cls=sq_cls)
+                    q = q_cls(a4, ord=ord_fn, key=key_fn, q_cls=sq_cls)
                     q.push((len(a4), 4))
                     self.assertEqual([1, 4], [ord_fn(x) for x in ex(q)])
 
                 with self.subTest('queue_007'):
-                    q = q_cls(a4, ord_fn=ord_fn, key_fn=key_fn, q_cls=sq_cls)
+                    q = q_cls(a4, ord=ord_fn, key=key_fn, q_cls=sq_cls)
                     q.push((len(a4), 0))
                     self.assertEqual([0, 1], [ord_fn(x) for x in ex(q)])
 
                 with self.subTest('queue_007'):
-                    q = q_cls([], ord_fn=ord_fn, key_fn=key_fn, q_cls=sq_cls)
+                    q = q_cls([], ord=ord_fn, key=key_fn, q_cls=sq_cls)
                     self.assertIsNone(q.peek())
 
                     val = (0, 5)
                     q.push(val)
                     v2 = q.peek()
                     self.assertEqual(val, v2)
+
+                with self.subTest('queue_009'):
+                    q = q_cls([])
+
+                    with self.assertRaises(IndexError):
+                        q.pop()
+
+                with self.subTest('queue_010'):
+                    q = q_cls(['a', 'b'])
+                    del q['a']
+                    self.assertEqual(q.pop(), 'b')
+
+                    with self.assertRaises(IndexError):
+                        q.pop()
+
+                with self.subTest('queue_011'):
+                    q = q_cls(['a', 'b'])
+
+                    self.assertEqual(True, 'b' in q)
+                    self.assertEqual(True, 'a' in q)
+                    q.pop()
+                    self.assertEqual(False, 'a' in q)
+
