@@ -29,15 +29,16 @@ log_tr_net_meta_in = log_tr.getChild('n.m.i')
 log_tr_net_meta_out = log_tr.getChild('n.m.o')
 
 
-def trc(postfix: Optional[str] = None) -> logging.Logger:
+def trc(postfix: Optional[str] = None, *, depth=1) -> logging.Logger:
     """
     Automatically generate a logger from the calling function
 
     :param postfix: append another logger name on top this
+    :param depth: depth of the call stack at which to capture the caller name
     :return: instance of a logger with a correct path to a current caller
 
     """
-    x = inspect.stack()[1]
+    x = inspect.stack()[depth]
 
     code = inspect.currentframe().f_back.f_code
     func = [obj for obj in gc.get_referrers(code) if inspect.isfunction(obj)][0]
