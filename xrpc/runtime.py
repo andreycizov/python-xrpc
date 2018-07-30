@@ -110,7 +110,7 @@ def reply(ret: Any):
     reply(ret)
 
 
-def reset(name: Union[Callable, str], new_val: float):
+def reset(name: Union[Callable, str], new_val: Any):
     if callable(name):
         name = name.__name__
 

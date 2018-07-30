@@ -69,7 +69,7 @@ class RegularRunner(Terminating, TerminatingHandler):
         self.regulars = regulars
 
         self.states_regulars: Dict[str, Optional[datetime]] = {
-            k: time_now() + timedelta(seconds=x.conf.initial) if x.conf.initial else None for k, x in
+            k: time_now() + timedelta(seconds=x.conf.initial) if x.conf.initial is not None else None for k, x in
         self.regulars.items()
         }
 
@@ -79,12 +79,15 @@ class RegularRunner(Terminating, TerminatingHandler):
     def terminate(self):
         self.wait.remove()
 
-    def reset(self, name: str, new_val: float):
+    def reset(self, name: str, new_val: Optional[float]):
         assert isinstance(new_val, (float, int, None.__class__)), new_val
 
         step_time = time_now()
 
-        self.states_regulars[name] = step_time + timedelta(seconds=new_val)
+        if new_val is not None:
+            new_val = step_time + timedelta(seconds=new_val)
+
+        self.states_regulars[name] = new_val
 
     @property
     def max_poll_regulars(self):
