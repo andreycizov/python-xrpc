@@ -309,7 +309,7 @@ class UnixTransport(UDPTransport):
             self._fd_bind = sock
             log_tr_net_meta_in.debug('Bind `%s`', self._path)
             sock.bind(self._path)
-            sock.listen(5)
+            sock.listen(1024)
 
         else:
             self._fd_clients[_norm_addr(url)] = sock
