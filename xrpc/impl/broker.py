@@ -6,7 +6,7 @@ from contextlib import ExitStack
 from datetime import datetime, timedelta
 from inspect import getfullargspec, ismethod
 from signal import SIGKILL
-from typing import Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple, Union, List, Any
+from typing import Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple, Union, List, Any, Iterable, Set
 
 from collections import deque
 from dataclasses import dataclass
@@ -21,7 +21,7 @@ from xrpc.logging import logging_config, LoggerSetup, logging_setup, circuitbrea
 from xrpc.loop import EventLoop
 from xrpc.net import RPCKey
 from xrpc.popen import popen
-from xrpc.runtime import service, sender, origin, reply, reset
+from xrpc.runtime import service, sender, origin, reset
 from xrpc.serde.types import build_types, ARGS_RET, PairSpec
 from xrpc.service import ServiceDefn
 from xrpc.trace import trc
@@ -30,7 +30,7 @@ from xrpc.util import time_now
 
 
 @dataclass
-class BrokerConf(Parsable):
+class ClusterConf(Parsable):
     heartbeat: float = 5.
     max_pings: int = 5
     metrics: float = 10.
@@ -42,6 +42,14 @@ class BrokerConf(Parsable):
 class WorkerConf(Parsable):
     processes: int = 3
     threads: int = 7
+
+
+@dataclass
+class BrokerConf(Parsable):
+    backlog: int = 100
+    """Maximum number of unassigned items in the queue"""
+    result_backlog: int = 100
+    """Maximum number of items that have not been passed as a result upstream"""
 
 
 @dataclass
@@ -144,26 +152,73 @@ class WorkerLoad:
 
 BACKEND = 'backend'
 
+SchedKeyQueue = KeyedQueue[datetime, RPCKey, 'SchedKey']
+
 
 @dataclass(frozen=True)
-class WorkerSched:
+class SchedKey:
     when: datetime
     key: RPCKey
 
     @classmethod
-    def ord_fn(cls, x: 'WorkerSched'):
+    def now(cls, key: RPCKey):
+        return SchedKey(time_now(), key)
+
+    @classmethod
+    def queue(cls) -> SchedKeyQueue:
+        return KeyedQueue(ord=SchedKey.ord_fn,
+                          key=SchedKey.key_fn)
+
+    @classmethod
+    def ord_fn(cls, x: 'SchedKey'):
         return x.when
 
     @classmethod
-    def key_fn(cls, x: 'WorkerSched'):
+    def key_fn(cls, x: 'SchedKey'):
         return x.key
+
+
+def process_queue(
+        jobs_pending_done: SchedKeyQueue,
+        fn: Callable[[RPCKey], Optional[float]],
+        tol: float = 0.
+) -> Optional[float]:
+    # sb = service(Broker[self.cls_req, self.cls_res], self.url_broker, group=BACKEND)
+
+    now = time_now()
+
+    while True:
+        val = jobs_pending_done.peek()
+
+        if val is None:
+            return None
+
+        dsec = (val.when - now).total_seconds()
+
+        if dsec > tol:
+            return dsec
+
+        val = jobs_pending_done.pop()
+
+        next_timeout = fn(val.key)
+
+        if next_timeout:
+            jobs_pending_done.push(SchedKey(now + timedelta(seconds=next_timeout), val.key))
+            pass
+
+        if val.key in jobs:
+            if val.key in jobs_res:
+                sb.bk_done_ok(val.key, jobs_res[val.key])
+            else:
+                sb.bk_done_fail(val.key)
+            jobs_pending_done.push(SchedKey(now + timedelta(seconds=conf.retry_delta), val.key))
 
 
 class Worker(Generic[RequestType, ResponseType]):
     def __init__(
             self,
             cls_req: Type[RequestType], cls_res: Type[ResponseType],
-            conf: BrokerConf,
+            conf: ClusterConf,
             broker_addr: Origin,
             fn: WorkerCallable[RequestType, ResponseType],
             url_metrics: Optional[str] = None,
@@ -203,8 +258,7 @@ class Worker(Generic[RequestType, ResponseType]):
         self.workers_jobs: Dict[str, RPCKey] = {}
         self.workers_free: Deque[str] = deque()
 
-        self.jobs_pending_done: KeyedQueue[datetime, RPCKey, WorkerSched] = KeyedQueue(ord=WorkerSched.ord_fn,
-                                                                                       key=WorkerSched.key_fn)
+        self.jobs_pending_done: SchedKeyQueue = SchedKey.queue()
 
     def _start_worker_inst(self):
         popen(worker_inst, logging_config(), self.par_conf.threads, self.fn, origin(BACKEND))
@@ -257,17 +311,17 @@ class Worker(Generic[RequestType, ResponseType]):
         if brid != self.brid:
             trc('brid').error('%s != %s %s', brid, self.brid, jid)
             reset(self.push_announce, 0)
-            sb.bk_assign_nack(brid, jid)
+            sb.bk_assign(brid, jid, False)
             return
 
         if jid in self.jobs:
             # is there any scenario where a job may be assigned to something else ?
             trc('kno').error('%s', jid)
-            sb.bk_assign_ack(brid, jid)
+            sb.bk_assign(brid, jid, True)
             return
 
         if len(self.workers_free) == 0 or len(self.jobs_res) >= self.conf.pending_max:
-            sb.bk_assign_nack(brid, jid)
+            sb.bk_assign(brid, jid, False)
             return
 
         nwid = self.workers_free.popleft()
@@ -281,32 +335,27 @@ class Worker(Generic[RequestType, ResponseType]):
 
         self.load.occupied += 1
 
-        sb.bk_assign_ack(brid, jid)
+        sb.bk_assign(brid, jid, True)
 
     @rpc(RPCType.Signalling)
     def resign(self, brid: RPCKey, jid: RPCKey, reason: Optional[str] = None):
-        sb = service(Broker[self.cls_req, self.cls_res], self.url_broker, group=BACKEND)
-
         if brid != self.brid:
             trc('brid').error('%s != %s %s', brid, self.brid, jid)
             reset(self.push_announce, 0)
-            sb.bk_resign_nack(brid, jid)
             return
 
         if jid not in self.jobs:
             # [w-1] resignation notice may appear after worker had successfully finished the job
             # [w-1] in such a scenario, a broker must report resignation as a failure by checking it's finish log
             trc('unk').error('%s', jid)
-            sb.bk_resign_ack(brid, jid)
             return
 
         if jid in self.jobs_res:
             trc('done').error('%s', jid)
-            sb.bk_resign_nack(brid, jid)
             return
 
         self._evict(jid)
-        sb.bk_resign_ack(brid, jid)
+        self._push_done(jid)
         return
 
     @rpc(RPCType.Signalling)
@@ -325,31 +374,27 @@ class Worker(Generic[RequestType, ResponseType]):
             del self.jobs[jid]
             del self.jobs_res[jid]
 
-    @regular()
-    def push_done(self) -> Optional[float]:
+            if jid in self.jobs_pending_done:
+                del self.jobs_pending_done[jid]
+
+    def _push_done(self, jid: RPCKey):
         sb = service(Broker[self.cls_req, self.cls_res], self.url_broker, group=BACKEND)
 
-        now = time_now()
+        if jid in self.jobs:
+            if jid in self.jobs_res:
+                sb.bk_done(jid, True, self.jobs_res[jid])
+            else:
+                sb.bk_done(jid, False)
 
-        while True:
-            val = self.jobs_pending_done.peek()
+        return self.conf.retry_delta
 
-            if val is None:
-                return None
-
-            dsec = (val.when - now).total_seconds()
-
-            if dsec > self.conf.retry_delta * 0.2:
-                return dsec
-
-            val = self.jobs_pending_done.pop()
-
-            if val.key in self.jobs:
-                if val.key in self.jobs_res:
-                    sb.bk_done_ok(val.key, self.jobs_res[val.key])
-                else:
-                    sb.bk_done_fail(val.key)
-                self.jobs_pending_done.push(WorkerSched(now + timedelta(seconds=self.conf.retry_delta), val.key))
+    @regular()
+    def push_done(self) -> Optional[float]:
+        return process_queue(
+            self.jobs_pending_done,
+            self._push_done,
+            self.conf.retry_delta * 0.1
+        )
 
     @regular(initial=None)
     def push_announce(self) -> float:
@@ -359,7 +404,7 @@ class Worker(Generic[RequestType, ResponseType]):
         # todo the issue is here of the fact that broker may be down for a while
         # todo we may try to re-register
         s = service(Broker[self.cls_req, self.cls_res], self.url_broker)
-        s.bk_announce(self.brid)
+        s.bk_announce(self.brid, self.load)
 
         return self.conf.heartbeat
 
@@ -395,6 +440,10 @@ class Worker(Generic[RequestType, ResponseType]):
 
         return True
 
+    def _push_done(self, jid):
+        self.jobs_pending_done.push(SchedKey(time_now(), jid))
+        reset(self.push_done, 0)
+
     @rpc(RPCType.Signalling, group=BACKEND)
     def bk_done(self, jid: RPCKey, res: ResponseType):
         if jid not in self.jobs_workers:
@@ -402,8 +451,7 @@ class Worker(Generic[RequestType, ResponseType]):
             return
 
         self.jobs_res[jid] = res
-        self.jobs_pending_done.push(WorkerSched(time_now(), jid))
-        reset(self.push_done, 0)
+        self._push_done(jid)
 
         wid = self.jobs_workers[jid]
         del self.jobs_workers[jid]
@@ -492,14 +540,16 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
             self,
             cls_req: Type[RequestType],
             cls_res: Type[ResponseType],
-            conf: BrokerConf,
+            conf: ClusterConf,
             url_results: Optional[str] = None,
-            url_metrics: Optional[str] = None
+            url_metrics: Optional[str] = None,
+            par_conf: BrokerConf = BrokerConf(),
     ):
         self.cls_req = cls_req
         self.cls_res = cls_res
 
         self.conf = conf
+        self.par_conf = par_conf
         self.url_results = url_results
         self.url_metrics = url_metrics
 
@@ -507,213 +557,236 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
         self.workers_brids: Dict[Origin, RPCKey] = {}
 
         self.jobs: Dict[RPCKey, JobState] = {}
-        self.jobs_pending: Deque[RPCKey] = deque()
-        self.jobs_pending_flush: Deque[RPCKey] = deque()
+        self.jobs_pending: KeyedQueue[RPCKey, RPCKey, RPCKey] = KeyedQueue()
 
         self.jobs_workers: Dict[RPCKey, Origin] = {}
         self.workers_jobs: Dict[Origin, List[RPCKey]] = {}
 
-    def job_new(self, jid: RPCKey, jreq: RequestType):
-        logging.getLogger('job_new').debug('%s %s', jid, jreq)
+        self.jobs_pending_assign: SchedKeyQueue = SchedKey.queue()
+        self.jobs_pending_resign: SchedKeyQueue = SchedKey.queue()
+
+        self.jobs_cancel: Set[RPCKey] = set()
+
+    def _job_new(self, jid: RPCKey, jreq: RequestType):
+        trc('0').debug('%s %s', jid, jreq)
 
         self.jobs[jid] = JobState(jreq, time_now())
-        self.jobs_pending.append(jid)
+        self.jobs_pending.push(jid)
 
-        self.jobs_try_assign()
+        reset(self.push_push_assign, 0)
 
-    def job_resign(self, jid: RPCKey):
-        w_id = self.jobs_workers[jid]
-
+    def _job_clean(self, jid: RPCKey) -> str:
+        wid = self.jobs_workers[jid]
         del self.jobs_workers[jid]
+        self.workers_jobs[wid].remove(jid)
+        return wid
 
-        self.workers_jobs[w_id].remove(jid)
+    def _job_resign(self, jid: RPCKey):
+        self._job_clean(jid)
 
-        self.jobs_pending.append(j)
+        if jid in self.jobs_cancel:
+            self._job_clean(jid)
+            del self.jobs[jid]
+            self.jobs_cancel.remove(jid)
+            if jid in self.jobs_pending:
+                del self.jobs_pending[jid]
+            if jid in self.jobs_pending_assign:
+                del self.jobs_pending_assign[jid]
+            if jid in self.jobs_pending_resign:
+                del self.jobs_pending_resign[jid]
+        else:
+            self.jobs_pending.push(jid)
 
-        # todo
-        self.jobs[jid].started = None
+            self.jobs[jid].started = None
+            reset(self.push_push_assign, 0)
 
-    def jobs_try_assign(self):
-        # we model assignments based on capacity returned by the workers
+    def _job_done(self, jid: RPCKey, jres: ResponseType):
+        self._job_clean(jid)
+        self.jobs[jid].finished = time_now()
+        self.jobs[jid].res = jres
 
-        free_workers = list(set(self.workers.keys()) - set(self.workers_jobs.keys()))
+    def _push_assign(self, jid: RPCKey) -> Optional[float]:
+        wid = self.jobs_workers[jid]
+        brid = self.workers_brids[wid]
+        s = service(Worker[self.cls_req, self.cls_res], wid)
+        s.assign(brid, jid, self.jobs[jid])
 
-        while len(free_workers) and len(self.jobs_pending):
-            # we need to then find a new worker for the job.
+        return self.conf.retry_delta
 
-            jid = self.jobs_pending.popleft()
+    @regular(initial=None)
+    def push_assign(self):
+        return process_queue(
+            self.jobs_pending_assign,
+            self._push_assign,
+            self.conf.retry_delta * 0.1,
+        )
 
-            # todo
+    def _push_resign(self, jid: RPCKey) -> Optional[float]:
+        wid = self.jobs_workers[jid]
+        brid = self.workers_brids[wid]
+        s = service(Worker[self.cls_req, self.cls_res], wid)
+        s.resign(brid, jid)
+
+        return self.conf.retry_delta
+
+    @regular(initial=None)
+    def push_resign(self):
+        return process_queue(
+            self.jobs_pending_resign,
+            self._push_assign,
+            self.conf.retry_delta * 0.1,
+        )
+
+    @regular(initial=None)
+    def push_push_assign(self):
+        def spread(iter_obj: Iterable[Tuple[str, int]]):
+            for wid, capa in iter_obj:
+                for i in range(capa):
+                    yield wid
+
+        def eat(obj: Deque[RPCKey]):
+            while len(obj):
+                try:
+                    yield obj.pop()
+                except IndexError:
+                    return
+
+        w_caps = (
+            (wid, max(0, self.workers[wid].load.capacity - len(self.workers_jobs[wid])))
+            for wid, wst
+            in self.workers.items()
+        )
+
+        jobs_workers = zip(spread(w_caps), eat(self.jobs_pending))
+
+        for wid, jid in jobs_workers:
+            trc('1').debug('%s %s', wid, jid)
+
             self.jobs[jid].started = time_now()
             self.jobs[jid].attempts += 1
-            # todo
 
-            wrkr = free_workers.pop()
-            self.workers_jobs[wrkr] = pars
+            self.jobs_workers[jid] = wid
+            self.workers_jobs[wid].append(jid)
 
-            s = service(Worker[self.cls_req, self.cls_res], wrkr)
+            self.jobs_pending_assign.push(SchedKey.now(jid))
+            reset(self.push_assign, 0)
 
-            # we could possibly assign these messages in a different way
+    def _brid_check(self, brid: RPCKey):
+        wid = sender()
+        if self.workers_brids.get(wid) != brid:
+            trc('brid', depth=2).error('%s', brid)
+            return True
+        return False
 
-            logging.getLogger('jobs_try_assign').debug('%s %s', wrkr, pars)
+    @rpc(RPCType.Signalling, group=BACKEND)
+    def bk_assign(self, brid: RPCKey, jid: RPCKey, ok: bool):
+        if self._brid_check(brid):
+            return
 
-            # if we only allow for assigns to happen once, then we can model the worker state
-            # perfectly.
+        if jid not in self.jobs:
+            trc('1').error('%s', jid)
+            return
 
-            # otherwise we need an absolute index of capacity values over time
+        if jid in self.jobs_pending_assign:
+            del self.jobs_pending_assign[jid]
 
-            try:
-                s.assign(pars)
-            except TimeoutError:
-                # todo if we timeout assigning a job to a worker, we evict the worker, rather than evict the job from
-                # todo the worker
-                logging.getLogger('jobs_try_assign').error('Timeout %s', wrkr)
+        if ok:
+            return
+        else:
+            if jid in self.jobs_pending_resign:
+                del self.jobs_pending_resign[jid]
 
-                if wrkr in self.workers_jobs:
-                    j = self.workers_jobs[wrkr]
+            self._job_resign(jid)
 
-                    if j == pars:
-                        del self.workers_jobs[wrkr]
-                        free_workers.append(wrkr)
-            else:
-                logging.getLogger('jobs_try_assign').debug('%s %s', wrkr, pars)
+    @rpc(RPCType.Signalling, group=BACKEND)
+    def bk_done(self, brid: RPCKey, jid: RPCKey, ok: bool, res: Optional[ResponseType] = None):
+        if self._brid_check(brid):
+            return
 
-    def get_metrics(self) -> BrokerMetric:
+        if jid not in self.jobs:
+            trc('1').error('%s', jid)
+            return
+
+        if jid in self.jobs_pending_assign:
+            del self.jobs_pending_assign[jid]
+
+        if jid in self.jobs_pending_resign:
+            del self.jobs_pending_resign[jid]
+
+        if ok:
+            self._job_done(jid, res)
+        else:
+            self._job_resign(jid)
+
+    @rpc()
+    def metrics(self) -> BrokerMetric:
         return BrokerMetric(
             len(self.workers),
             len(self.jobs_pending),
             len(self.jobs),
-            len(self.workers_jobs)
+            len(self.jobs_workers),
         )
 
-    @rpc()
-    def metrics(self) -> BrokerMetric:
-        return self.get_metrics()
-
     @regular()
-    def reg_metrics(self) -> float:
-        # how to we allow for reflection in the API?
-
-        if self.url_metrics:
-            s = service(MetricCollector, self.url_metrics)
-            s.metrics(self.get_metrics())
+    def push_metrics(self) -> float:
+        s = service(MetricCollector, self.url_metrics)
+        s.metrics(self.metrics())
 
         return self.conf.metrics
 
     @rpc(RPCType.Repliable)
     def assign(self, jid: RPCKey, jreq: RequestType) -> bool:
-        if len(self.jobs_pending) + len(self.jobs_pending_flush) > self.max_jobs_flush:
+        if len(self.jobs_pending) + len(self.jobs_workers) >= self.par_conf.backlog + self.par_conf.result_backlog:
             return False
 
-        if jreq not in self.jobs:
-            self.job_new(jid, jreq)
+        if jid not in self.jobs:
+            self._job_new(jid, jreq)
 
         return True
 
-    def pending_flush_add(self, jid: RPCKey):
-        if self.url_results:
-            self.jobs_pending_flush.append(jid)
+    @rpc(RPCType.Repliable)
+    def cancel(self, jid: RPCKey) -> bool:
+        if jid not in self.jobs:
+            return False
 
-            # todo how do we enable proper sequential syncing between two Actors?
+        if jid in self.workers:
+            self._job_resign(jid)
+            self.jobs_cancel.add(jid)
         else:
-            logging.getLogger('pending_flush_add').warning('[1] %s')
+            self._job_clean(jid)
 
-    @rpc(RPCType.Durable)
+        return True
+
+    @rpc(RPCType.Repliable)
     def resign(self, jid: RPCKey, reason: Optional[str] = None) -> bool:
         if jid not in self.jobs:
-            logging.getLogger('resign').error('[1] %s %s', jid, reason)
             return False
 
-        if jid not in self.jobs_workers:
-            logging.getLogger('resign').error('[2] %s %s', jid, reason)
+        if jid not in self.workers:
             return False
 
-        wid = self.jobs_workers[jid]
-
-        try:
-            s = service(Worker[self.cls_req, self.cls_res], wid, ClientConfig(timeout_total=1))
-            s.resign(jid, reason)
-        except TimeoutError:
-            pass
-
-        self.job_resign(jid)
-
-        logging.getLogger('resign').debug('Resigned %s', jid)
-
-        self.jobs_try_assign()
+        self._job_resign(jid)
 
         return True
 
     def _worker_new(self, wbrid: RPCKey, wid: Origin, load: WorkerLoad):
-        logging.getLogger('worker_new').debug('%s %s %s', wbrid, wid, load)
+        trc().debug('%s %s %s', wbrid, wid, load)
 
         self.workers[wid] = WorkerState(self.conf.max_pings, WorkerLoad(occupied=0, capacity=load.capacity))
         self.workers_jobs[wid] = []
         self.workers_brids[wid] = wbrid
 
-        # todo if called from bk_announce, the worker may still not have received it's brid yet
-        self.jobs_try_assign()
+        reset(self.push_push_assign, 0)
 
     def _worker_lost(self, wid: Origin):
-        logging.getLogger('worker_lost').debug('%s', wid)
+        trc().debug('%s', wid)
 
         for jid in self.workers_jobs[wid]:
-            self.job_resign(jid)
+            self._job_resign(jid)
 
         del self.workers[wid]
 
-        # todo change the jobs_try_assign to a regular, so that we could  pend them after the call
-        self.jobs_try_assign()
-
-    def _worker_done(self, wid: Origin, jid: RPCKey):
-        if wid not in self.workers:
-            logging.getLogger('job_done').error('[1] %s', wid)
-            return
-
-        if wid not in self.workers_jobs:
-            logging.getLogger('job_done').error('[2] %s %s', wid, jid)
-            return
-
-        if jid not in self.workers_jobs[wid]:
-            logging.getLogger('job_done').error('[3] %s %s', wid, jid)
-            return
-
-        self.workers_jobs[wid].remove(jid)
-        del self.jobs_workers[jid]
-
-        # todo model the worker free (maybe)
-        # todo how do we model the free workers ?
-
-        self.jobs_try_assign()
-
-    @rpc(RPCType.Durable, group=BACKEND)
-    def bk_done(self, jid: RPCKey, jres: ResponseType):
-        wid = sender()
-
-        # if we need to sync a set of things, we'd rather put them somewhere and send all of them together
-
-        s = service(Worker[self.cls_req, self.cls_res], wid, ClientConfig(timeout_total=1))
-        s.done_ack(jid)
-
-        if wid not in self.workers:
-            trc('2').error('%s %s %s', wid, jid, jres)
-            return
-
-        # todo if a job is done after the broker had been changed
-        # todo but that worker hasn't yet received a new brid
-
-        if jid not in self.jobs:
-            trc('1').error('%s %s %s', wid, jid, jres)
-            return
-
-        self._worker_done(wid, jid)
-
-        self.pending_flush_add(jid)
-
-        jobj = self.jobs[jid]
-
-        jobj.finished = time_now()
-        jobj.res = jres
+        reset(self.push_push_assign, 0)
 
     @rpc(group=BACKEND)
     def bk_register(self, load: WorkerLoad) -> Optional[RPCKey]:
@@ -735,7 +808,7 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
             self._worker_lost(wid)
 
     @rpc(type=RPCType.Signalling, group=BACKEND)
-    def bk_announce(self, wbrid: Optional[RPCKey]):
+    def bk_announce(self, wbrid: Optional[RPCKey], load: WorkerLoad):
         wid = sender()
 
         if wid not in self.workers:
@@ -749,46 +822,22 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
 
         # todo only ping workers through announce
 
-        self.workers[wid].pings_remaining = self.conf.max_pings
-
         wst = self.workers[wid]
-        wbrid = self.workers_brids[wid]
 
-        if wbrid != wbrid:
-            self._worker_lost(wid)
-            # todo: evict all jobs related to the worker
-            return False
+        flag_changed = wst.load.capacity != load.capacity
 
         wst.load.capacity = load.capacity
-        # todo we may need to change the state of the arbitrageur
+        wst.pings_remaining = self.conf.max_pings
 
-        return True
-
-        wbrid = self.workers_brids.get(nwid)
-
-        # todo when we fail to assign a job to a worker, we completely evict it
-
-        # todo: a brid is unknown
-
-        if wbrid != wbrid:
-            wbrid = RPCKey.new()
-            nwid = service(Worker[self.cls_req, self.cls_res], nwid, ClientConfig(timeout_total=1))
-            nwid._brid_new(wbrid)
-
-        reply(wbrid)
-
-        if nwid not in self.workers:
-            self._worker_new(wbrid, nwid, load)
-        else:
-            self.workers[nwid].pings_remaining = self.conf.max_pings
-            self.workers[nwid].load = load
+        if flag_changed:
+            reset(self.push_push_assign, 0)
 
     @regular()
     def gc(self) -> float:
         for k in list(self.workers.keys()):
             self.workers[k].pings_remaining -= 1
 
-            logging.getLogger('gc').debug('%s %s', k, self.workers[k])
+            trc().debug('%s %s', k, self.workers[k])
 
             if self.workers[k].pings_remaining <= 0:
                 self._worker_lost(k)
