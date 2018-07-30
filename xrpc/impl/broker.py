@@ -88,15 +88,6 @@ def get_func_types(fn: WorkerCallable) -> Tuple[Type[RequestType], Type[Response
     return annot[arg.name], annot[ARGS_RET]
 
 
-WPT = TypeVar('WorkerPacketType')
-
-
-@dataclass
-class WorkerEnvelope(Generic[WPT]):
-    payload: Optional[WPT] = None
-    has_payload: bool = False
-
-
 def worker_inst(logger_config: LoggerSetup, multiplex: int, fn: WorkerCallable, unix_url: str):
     for i in range(multiplex - 1):
         if os.fork() == 0:
