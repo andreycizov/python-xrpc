@@ -318,7 +318,7 @@ class SignalRunner(LoggingActor, TerminatingHandler):
             except TerminationException:
                 act.terminate('sigte')
             except:
-                logging.getLogger(__name__ + '.' + self.__class__.__name__).exception('%s %s', sig, frame)
+                logging.getLogger(__name__ + '.' + self.__class__.__name__).exception('%s', sig)
 
     def signal_handler(self, sig, frame):
         self.logger('hdlr.x').warning('%s %s', sig, frame)
