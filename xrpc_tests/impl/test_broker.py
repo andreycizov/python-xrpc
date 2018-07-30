@@ -1,17 +1,17 @@
 import logging
 import os
 from _signal import SIGTERM, SIGKILL
-from collections import defaultdict
-
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from time import sleep
 from typing import Dict, Optional
 
+from collections import defaultdict
+from dataclasses import dataclass
+
 from xrpc.client import ClientConfig, client_transport
 from xrpc.dsl import RPCType, rpc, regular, signal, DEFAULT_GROUP
 from xrpc.error import TerminationException
-from xrpc.impl.broker import Broker, Worker, BrokerConf, MetricCollector, NodeMetric, WorkerMetric, BACKEND
+from xrpc.impl.broker import Broker, Worker, BrokerConf, MetricCollector, NodeMetric, WorkerMetric, BACKEND, WorkerConf
 from xrpc.logging import LoggerSetup, LL
 from xrpc.popen import wait_all
 from xrpc.util import time_now
@@ -136,6 +136,35 @@ class TestBroker(ProcessHelperCase):
             LL('xrpc.tr.n.s', logging.INFO),
             LL('xrpc.loop', logging.INFO),
         ], ['stream:///stderr'])
+
+    def test_worker_startup(self):
+        conf = BrokerConf()
+
+        ub = 'udp://127.0.0.1:5678'
+        uw = 'udp://127.0.0.1:5789'
+        par_conf = WorkerConf()
+        pidw = self.ps.popen(
+            server_main_new,
+            lambda: (
+                Worker[Request, Response],
+                Worker(Request, Response, conf, ub, worker_function, None, par_conf=par_conf)
+            ),
+            {
+                DEFAULT_GROUP: uw,
+                BACKEND: 'unix://#bind'
+            },
+        )
+
+        with self.ps.timer(5.) as tr, client_transport(
+                Worker[Request, Response], uw, ClientConfig(ignore_horizon=True)) as br:
+            x: Optional[WorkerMetric] = None
+            while x is None or x.workers_free < par_conf.processes * par_conf.threads:
+                x = br.metrics()
+                tr.sleep(0.3)
+
+        pidw.send_signal(SIGTERM)
+
+        self.assertEqual(wait_all(pidw, max_wait=2), [0])
 
     def test_workflow_a(self):
         conf = BrokerConf()
