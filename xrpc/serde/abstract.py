@@ -1,8 +1,8 @@
 import logging
 import sys
-from collections import deque
-
 from types import ModuleType
+
+from collections import deque
 
 from xrpc.serde.error import SerdeException
 
@@ -15,8 +15,8 @@ else:
 
 from dataclasses import dataclass, field
 
-DESER = Callable[[Union[list, dict]], Any]
-SER = Callable[[Any], Union[list, dict]]
+DESER = Callable[[Union[list, dict, str, float, int]], Any]
+SER = Callable[[Any], Union[list, dict, str, float, int]]
 
 
 def _repr_typevar(x):

@@ -1,12 +1,11 @@
 import base64
+import datetime
 import inspect
 import logging
 import sys
+import uuid
 from enum import Enum
 from inspect import FullArgSpec
-
-import datetime
-import uuid
 
 from xrpc.generic import build_generic_context as _build_generic_context
 from xrpc.serde.error import SerdeException
@@ -349,6 +348,11 @@ class UUIDSerde(SerdeType):
 
     def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
         return SerdeNode(t, [])
+
+    def serializer(self, t: Any, deps: List[DESER]) -> DESER:
+        def uuid_serializer(val: uuid.UUID):
+            return val.hex
+        return uuid_serializer
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
         return lambda val: uuid.UUID(hex=val)
