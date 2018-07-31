@@ -2,19 +2,19 @@ import base64
 import logging
 import multiprocessing
 import os
+import signal
+import subprocess
 import sys
 import zlib
 from contextlib import ExitStack, contextmanager
-
-import dill
-import signal
-import subprocess
-from attr import dataclass
 from datetime import timedelta
 from time import sleep
-from typing import Callable, Any, Tuple, Dict, List
+from typing import Callable, Any, Tuple, Dict, List, Optional
 
-from xrpc.util import signal_context, time_now
+import dill
+from attr import dataclass
+
+from xrpc.util import signal_context, time_now, _build_callstack
 
 
 @contextmanager
@@ -64,6 +64,7 @@ def wait_all(*waiting, max_wait=5.) -> List[int]:
 
 @dataclass
 class PopenStruct:
+    traceback: str
     fn: Callable
     args: Tuple[Any]
     kwargs: Dict[str, Any]
@@ -84,6 +85,7 @@ def popen(fn, *args, **kwargs) -> subprocess.Popen:
         __name__,
         f'{fn.__module__}.{fn.__name__}',
         argv_encode(PopenStruct(
+            _build_callstack(ignore=2),
             fn,
             args,
             kwargs
@@ -126,6 +128,10 @@ class PopenStack:
                 raise ValueError('We have timed out and therefore killed all of the subprocesses')
 
 
+def _popen_defn() -> Optional[PopenStruct]:
+    return argv_decode(sys.argv[2])
+
+
 def popen_main():
     with ExitStack() as es:
         if os.environ.get('COVERAGE_PROCESS_START'):
@@ -141,19 +147,18 @@ def popen_main():
             prev_handler = {k: v for k, v in zip(codes, prev_handlers)}
 
             try:
-                defn: PopenStruct = argv_decode(sys.argv[2])
+                defn: PopenStruct = _popen_defn()
             except:
                 import traceback
                 import pprint
 
                 fmtd = pprint.pformat(sys.argv)
+                print(defn.traceback, file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)
                 sys.stderr.flush()
                 raise ValueError(f'Cannot unpickle arguments, called with {fmtd}')
 
-            fn = defn.fn
-
-            fn(*defn.args, **defn.kwargs)
+            defn.fn(*defn.args, **defn.kwargs)
 
 
 if __name__ == '__main__':

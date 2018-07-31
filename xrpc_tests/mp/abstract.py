@@ -1,22 +1,23 @@
 import logging
 import multiprocessing
+import shutil
+import signal
+import subprocess
 import sys
 import unittest
 from contextlib import ExitStack
+from datetime import timedelta, datetime
 from itertools import count
 from os import environ
 from tempfile import mkdtemp
-
-import shutil
-import subprocess
-from dataclasses import field, dataclass
-from datetime import timedelta, datetime
 from time import sleep
 from typing import Optional
 
+from dataclasses import field, dataclass
+
 from xrpc.actor import run_server
 from xrpc.logging import LoggerSetup, LL, logging_setup
-from xrpc.popen import PopenStack, cov, popen
+from xrpc.popen import PopenStack, cov, popen, _popen_defn
 from xrpc.util import time_now
 
 
@@ -25,7 +26,13 @@ def helper_main(ls, fn, *args, **kwargs):
         try:
             fn(*args, **kwargs)
         except:
-            logging.getLogger('helper_main').exception('From %s %s %s', fn, args, kwargs)
+            defn = _popen_defn()
+            tb = None if defn is None else defn.traceback
+            if tb:
+                logging.getLogger('helper_main').exception('From %s %s %s\nPopen-called from:\n%s', fn, args, kwargs,
+                                                           tb)
+            else:
+                logging.getLogger('helper_main').exception('From %s %s %s', fn, args, kwargs)
             raise
 
 
@@ -47,7 +54,6 @@ def server_main_new(factory_fn, addrs, *args, **kwargs):
         run_server(tp, rpc, addrs)
     finally:
         logging.getLogger('server_main').exception('Exited with: %s %s', factory_fn, sys.exc_info())
-
 
 
 def wait_items(waiting, max_wait=40):
@@ -145,10 +151,14 @@ class ProcessHelperCase(unittest.TestCase):
         r = ProcessHelper(self._get_ls())
         return r
 
+    def signal_handler(self, signal, frame):
+        self.tearDown()
+
     def setUp(self):
         self.steps = count()
         self.ps = self.make_ph().__enter__()
         self.dtemp = mkdtemp()
+        signal.signal(signal.SIGINT, self.signal_handler)
 
     def tearDown(self):
         self.ps.__exit__(*sys.exc_info())
