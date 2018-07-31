@@ -239,7 +239,7 @@ class SignalRunner(LoggingActor, TerminatingHandler):
         self.logger('tran.dem').debug('%s', self.path_unix)
 
     def add(self, act: 'Actor', signals: Dict[int, List[SignalHdlr]]) -> SignalRunnerRef:
-        self.logger('act.add').warning('%s %s', act, signals)
+        self.logger('act.add').info('%s %s', act, signals)
 
         new_idx = next(self.idx_ctr)
         self.acts[new_idx] = act
@@ -256,7 +256,7 @@ class SignalRunner(LoggingActor, TerminatingHandler):
         return SignalRunnerRef(self, new_idx)
 
     def remove(self, act: int):
-        self.logger('act.rm').warning('%s %s %s', act, self.ssighs, self.has_transport)
+        self.logger('act.rm').info('%s %s %s', act, self.ssighs, self.has_transport)
 
         del self.acts[act]
 
@@ -560,19 +560,19 @@ class Actor(Terminating, LoggingActor):
             del self.names_terms[name]
 
     def terminate(self, why=None):
-        self.logger('term').debug('Terminating %s %s', why, self)
+        self.logger('term').info('Terminating %s %s', why, self)
 
         for k, v in list(self.chans.items()):
             del self.chans[k]
 
             tran = self.el.transport(v).remove()
 
-            self.logger('term.tran').warning('Closing %s %s', k, v)
+            self.logger('term.tran').info('Closing %s %s', k, v)
             tran.close()
 
         for k, v in list(self.terms.items()):
             del self.terms[k]
-            self.logger('term.act').warning('Terminating %s %s', why, v)
+            self.logger('term.act').info('Terminating %s %s', why, v)
             v.terminate()
 
     def ctx(self, **kwargs) -> ExecutionContext:

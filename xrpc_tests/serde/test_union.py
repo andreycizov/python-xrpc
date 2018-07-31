@@ -1,6 +1,5 @@
 import sys
 import unittest
-from pprint import pprint
 from typing import Optional, Union
 
 from dataclasses import dataclass
@@ -118,9 +117,6 @@ class TestWalk(unittest.TestCase):
         with self.subTest('init'):
             serde = SerdeSet.walk(SERVER_SERDE_INST, tp).struct(SERVER_SERDE_INST)
             serde_2 = SerdeSet.walk(SERVER_SERDE_INST, tp_2).struct(SERVER_SERDE_INST)
-
-            pprint(serde.serializers)
-            pprint(serde_2.deserializers)
 
             i = val
 

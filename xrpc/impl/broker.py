@@ -109,7 +109,7 @@ def worker_inst(logger_config: LoggerSetup, multiplex: int, fn: WorkerCallable, 
         for stack in stacks:
             es.enter_context(stack)
 
-        logging.getLogger('worker_inst').error(f'Start %s', unix_url)
+        logging.getLogger('worker_inst').info(f'Start %s', unix_url)
 
         # use the callable's type hints in order to serialize and deserialize parameters
 
@@ -433,7 +433,7 @@ class Worker(Generic[RequestType, ResponseType]):
         # one of the workers had disconnected
 
         host, reason = exc.args
-        trc('1').error('%s %s', host, reason)
+        trc('1').info('%s %s', host, reason)
 
         if host in self.workers_jobs:
             jid = self.workers_jobs[host]
