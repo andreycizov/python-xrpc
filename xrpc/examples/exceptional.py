@@ -42,7 +42,7 @@ class ExceptionalDropper(Exceptional):
 class ExceptionalClient:
     @rpc(exc=True)
     def ep(self, exc: ConnectionAbortedError) -> bool:
-        pass
+        return True
 
     @rpc(RPCType.Durable)
     def callme(self, x: int) -> int:
