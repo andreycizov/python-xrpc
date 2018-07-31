@@ -3,8 +3,16 @@ import logging
 from xrpc.dsl import rpc, RPCType, signal
 from xrpc.error import TerminationException
 
+LIVELY = 'lively'
 
-class Exceptional:
+
+class Lively:
+    @rpc(RPCType.Repliable, group=LIVELY)
+    def is_alive(self) -> bool:
+        return True
+
+
+class Exceptional(Lively):
     """Handle exceptional socket conditions"""
 
     @rpc(exc=True)
@@ -39,7 +47,7 @@ class ExceptionalDropper(Exceptional):
         pass
 
 
-class ExceptionalClient:
+class ExceptionalClient(Lively):
     @rpc(exc=True)
     def ep(self, exc: ConnectionAbortedError) -> bool:
         return True
