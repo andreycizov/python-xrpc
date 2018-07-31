@@ -1,13 +1,13 @@
 import logging
 import socket
-from contextlib import contextmanager
-from itertools import count
-
 import time
-from dataclasses import dataclass
+from contextlib import contextmanager
 from datetime import datetime
 from functools import reduce
+from itertools import count
 from typing import Dict, List, Union, Optional, Callable, Tuple
+
+from dataclasses import dataclass
 
 from xrpc.net import RPCPacket
 from xrpc.trace import log_tr_net_pkt_in, log_tr_net_pkt_err, log_tr_net_pkt_out
@@ -169,7 +169,8 @@ class EventLoop:
                 continue
 
             if sched_item < 0.:
-                self.logger('max_waits.e').warning('`%s` (%s < 0.)', v.scheduler, sched_item)
+                if -sched_item > 0.010:
+                    self.logger('max_waits.e').warning('`%s` (%s < 0.)', v.scheduler, sched_item)
                 sched_item = 0.
             r[k] = sched_item
 
@@ -316,7 +317,7 @@ class EventLoop:
                     for raw_packet in self.recv_connabt(idx, has_data):
                         packet = RPCPacket.unpack(raw_packet.data)
 
-                        log_tr_net_pkt_in.debug('%s %s', raw_packet.addr, packet)
+                        log_tr_net_pkt_in.debug('%s %s %s', transport.origin, raw_packet.addr, packet)
 
                         raw_rpc_packet = RPCPacketRaw(raw_packet.addr, packet)
 
@@ -332,11 +333,13 @@ class EventLoop:
             self.logger('recv.ex').debug('%s %s %s', nonflat_fds, polled_flags, initial_polled_flags)
 
     def send(self, idx: int, packet: RPCPacketRaw):
-        log_tr_net_pkt_out.debug('%s %s', packet.addr, packet.packet)
+        chan = self.transports[idx]
+
+        log_tr_net_pkt_out.debug('%s %s %s', chan.origin, packet.addr, packet.packet)
 
         raw_packet = Packet(packet.addr, packet.packet.pack())
 
-        self.transports[idx].send(raw_packet)
+        chan.send(raw_packet)
 
     def push(self, idx: int, entry: ELPktEntry):
         assert len(self.stacks[idx]) == 0 or all(isinstance(x, ELPktEntry) for x in self.stacks[idx]), self.stacks
