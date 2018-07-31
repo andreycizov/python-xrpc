@@ -18,9 +18,9 @@ from xrpc.net import RPCPacket, RPCReply, RPCPacketType
 from xrpc.runtime import ExecutionContext
 from xrpc.serde.abstract import SerdeStruct
 from xrpc.service import SocketIOEntrySet, RegularEntrySet, RPCEntrySet, SignalEntrySet
-from xrpc.trace import log_tr_act
+from xrpc.trace import log_tr_act, trc
 from xrpc.transport import Transport, RPCPacketRaw, Transports, Packet
-from xrpc.util import signal_context, time_now, _log_called_from
+from xrpc.util import signal_context, time_now, _log_called_from, _log_traceback
 
 
 class Terminating:
@@ -363,12 +363,23 @@ class RPCGroupRunner(Terminating, TerminatingHandler):
 
         self.serde = serde
 
-        self.rpcs = {k: v for k, v in rpcs.items() if not v.conf.exc}
+        self.rpcs: RPCEntrySet = {k: v for k, v in rpcs.items() if not v.conf.exc}
 
-        self.rpcs_exc = {k: v for k, v in rpcs.items() if v.conf.exc}
+        self.rpcs_exc: RPCEntrySet = {k: v for k, v in rpcs.items() if v.conf.exc}
 
+        self.chan.push_exc(ELExcEntry(self.handle_exc))
+
+    def handle_exc(self, exc: BaseException) -> bool:
+        ctx = self.actor.ctx()
         for k, v in self.rpcs_exc.items():
-            self.chan.push_exc(ELExcEntry(v.fn))
+            try:
+                if ctx.exec('tran_exc', v.fn, exc):
+                    return True
+            except TerminationException:
+                self.actor.terminate('te')
+                return True
+        else:
+            return False
 
     def terminate(self):
         self.wait.remove()
@@ -390,7 +401,8 @@ class RPCGroupRunner(Terminating, TerminatingHandler):
 
     def _get_rpc(self, name):
         if name not in self.rpcs:
-            logging.error(f'Could not find name %s %s', name, self.rpcs.keys())
+            _log_traceback(trc('1'))
+            trc('0').error('%s %s %s %s', self.chan.origin, self.group, name, self.rpcs.keys())
             raise InvalidFingerprintError('name')
 
         rpc_def = self.rpcs[name]
@@ -602,6 +614,8 @@ def actor_create(
     act = Actor(el)
 
     for tran_grp in tran_grps:
+        trc('tran').debug('%s %s', tran_grp, bind_urls[tran_grp])
+
         tran_ref = act.add_transport(tran_grp, bind_urls[tran_grp])
 
         if tran_grp not in rpc_grps:
