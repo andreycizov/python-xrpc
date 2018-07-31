@@ -8,7 +8,7 @@ import xrpc
 from xrpc.client import ClientConfig, ServiceWrapper
 from xrpc.loop import EventLoop
 from xrpc.service import ServiceDefn
-from xrpc.trace import log_tr_exec_in, log_tr_exec_out
+from xrpc.trace import log_tr_exec_in, log_tr_exec_out, trc
 from xrpc.transport import Origin
 
 RUNTIME_TL = threading.local()
@@ -124,7 +124,6 @@ TB = TypeVar('TB')
 
 def _masquerade(origin: str, orig: ServiceDefn, new: ServiceDefn, **map: str) -> str:
     """build an origin URL such that the orig has all of the mappings to new defined by map"""
-    # todo if origin contains maqueraded, masquerade the masqueraded
 
     origin: ParseResult = urlparse(origin)
 
@@ -170,6 +169,8 @@ def service(obj: Type[T], dest: Origin, conf: ClientConfig = ClientConfig(), gro
     group = ctx.chan_def if group is None else group
 
     assert group is not None, 'service() can only be called within execution context that references channels'
+
+    trc('1').debug('%s %s %s', obj, dest, group)
 
     try:
         chan_idx = ctx.chans[group]
