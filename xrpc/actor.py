@@ -321,7 +321,7 @@ class SignalRunner(LoggingActor, TerminatingHandler):
                 logging.getLogger(__name__ + '.' + self.__class__.__name__).exception('%s', sig)
 
     def signal_handler(self, sig, frame):
-        self.logger('hdlr.x').warning('%s %s', sig, frame)
+        self.logger('hdlr.x').info('%s %s', sig, frame)
 
         with Transport.from_url(self.path_unix) as t:
             sig = str(sig).encode()
