@@ -530,9 +530,13 @@ class JobState:
 
 
 class BrokerResult(Generic[ResponseType]):
-    @rpc(RPCType.Repliable)
-    def finished(self, id_: RPCKey, job: ResponseType) -> bool:
+    @rpc(RPCType.Signalling)
+    def finished(self, jid: RPCKey, job: ResponseType):
         logging.getLogger('finished').warning('unused %s', job)
+
+        s = service(Broker[RequestType, ResponseType], sender(), group=DEFAULT_GROUP)
+        s: Broker[RequestType, ResponseType]
+        s.flush_ack(jid)
 
 
 class BrokerEntry(Generic[ResponseType]):
@@ -570,6 +574,7 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
 
         self.jobs_pending_assign: SchedKeyQueue = SchedKey.queue()
         self.jobs_pending_resign: SchedKeyQueue = SchedKey.queue()
+        self.jobs_pending_flush: SchedKeyQueue = SchedKey.queue()
 
         self.jobs_cancel: Set[RPCKey] = set()
 
@@ -611,6 +616,15 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
         self.jobs[jid].finished = time_now()
         self.jobs[jid].res = jres
 
+        self.jobs_pending_flush.push(SchedKey.now(jid))
+        reset(self.push_flush, 0)
+
+    def _job_flush(self, jid: RPCKey):
+        del self.jobs[jid]
+
+        if jid in self.jobs_pending_flush:
+            del self.jobs_pending_flush[jid]
+
     def _push_assign(self, jid: RPCKey) -> Optional[float]:
         wid = self.jobs_workers[jid]
         brid = self.workers_brids[wid]
@@ -642,6 +656,31 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
             self._push_resign,
             self.conf.retry_delta * 0.1,
         )
+
+    def _push_flush(self, jid: RPCKey) -> Optional[float]:
+        if not self.url_results:
+            self.flush_ack(jid)
+        else:
+            assert self.jobs[jid].finished
+            s = service(BrokerResult[self.cls_res], self.url_results, group=DEFAULT_GROUP)
+            s: BrokerResult[ResponseType]
+            s.finished(jid, self.jobs[jid].res)
+            return self.conf.retry_delta
+
+    @regular(initial=None)
+    def push_flush(self):
+        return process_queue(
+            self.jobs_pending_flush,
+            self._push_flush,
+            self.conf.retry_delta * 0.1,
+        )
+
+    @rpc(RPCType.Signalling)
+    def flush_ack(self, jid: RPCKey):
+        if jid not in self.jobs:
+            return
+
+        self._job_flush(jid)
 
     @regular(initial=None)
     def push_push_assign(self):
@@ -749,7 +788,8 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType]):
 
     @rpc(RPCType.Repliable)
     def assign(self, jid: RPCKey, jreq: RequestType) -> bool:
-        if len(self.jobs_pending) + len(self.jobs_workers) >= self.par_conf.backlog + self.par_conf.result_backlog:
+        if len(self.jobs_pending) + len(self.jobs_workers) + len(
+                self.jobs_pending_flush) >= self.par_conf.backlog + self.par_conf.result_backlog:
             return False
 
         if jid not in self.jobs:

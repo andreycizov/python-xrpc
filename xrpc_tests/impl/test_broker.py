@@ -1,7 +1,9 @@
 import logging
 import os
+import shutil
 from _signal import SIGTERM, SIGKILL
 from datetime import datetime, timedelta
+from tempfile import mkdtemp
 from time import sleep
 from typing import Dict, Optional
 
@@ -11,9 +13,13 @@ from dataclasses import dataclass
 from xrpc.client import ClientConfig, client_transport
 from xrpc.dsl import RPCType, rpc, regular, signal, DEFAULT_GROUP
 from xrpc.error import TerminationException
-from xrpc.impl.broker import Broker, Worker, BrokerConf, MetricCollector, NodeMetric, WorkerMetric, BACKEND, WorkerConf
+from xrpc.impl.broker import Broker, Worker, ClusterConf, MetricCollector, NodeMetric, WorkerMetric, BACKEND, \
+    WorkerConf, BrokerMetric
 from xrpc.logging import LoggerSetup, LL
+from xrpc.net import RPCKey
 from xrpc.popen import wait_all
+from xrpc.runtime import sender, service
+from xrpc.trace import trc
 from xrpc.util import time_now
 from xrpc_tests.mp.abstract import ProcessHelperCase, server_main, DEFAULT_LEVEL, server_main_new
 
@@ -21,7 +27,7 @@ from xrpc_tests.mp.abstract import ProcessHelperCase, server_main, DEFAULT_LEVEL
 @dataclass(eq=True, frozen=True)
 class Request:
     val_req: int = 5
-    when: Optional[datetime] = None
+    where: Optional[str] = None
 
 
 @dataclass
@@ -33,14 +39,21 @@ class Response:
 class ResultsReceiver:
     exit_in: Optional[datetime] = None
 
-    @rpc(RPCType.Durable)
-    def finished_a(self, job: Response):
-        self.exit_in = time_now() + timedelta(seconds=0.5)
-        logging.debug('Finished %s', self.exit_in)
+    def _ack(self, jid: RPCKey):
+        s = service(Broker[Request, Response], sender(), group=DEFAULT_GROUP)
+        s: Broker[Request, Response]
+        s.flush_ack(jid)
 
     @rpc(RPCType.Durable)
-    def finished_b(self, job: Response):
-        logging.debug('Finished %s', self.exit_in)
+    def finished_a(self, jid: RPCKey, job: Response):
+        self.exit_in = time_now() + timedelta(seconds=0.5)
+        trc('0').warning('Finished %s', self.exit_in)
+        self._ack(jid)
+
+    @rpc(RPCType.Durable)
+    def finished_b(self, jid: RPCKey, job: Response):
+        trc('1').warning('Finished %s', self.exit_in)
+        self._ack(jid)
         raise TerminationException('Finished')
 
     @signal()
@@ -77,7 +90,7 @@ class MetricReceiver(MetricCollector):
 
     @rpc()
     def metric_counts(self) -> Dict[str, int]:
-        r = {k.__name__: len([x for x in v if not isinstance(x, WorkerMetric) or x.running_since is not None]) for
+        r = {k.__name__: len([x for x in v if not isinstance(x, WorkerMetric) or x.jobs > 0]) for
              k, v in self.metrics_by_type.items()}
         return {k: v for k, v in r.items() if v > 0}
 
@@ -94,7 +107,7 @@ def worker_function_sleeper(req: Request) -> Response:
 def worker_function_resign(req: Request) -> Response:
     logging.getLogger('worker_function_resign').warning('%s', req)
 
-    if time_now() < req.when:
+    if not os.path.exists(req.where):
         sleep(999999)
 
     return Response(99)
@@ -138,7 +151,7 @@ class TestBroker(ProcessHelperCase):
         ], ['stream:///stderr'])
 
     def test_worker_startup(self):
-        conf = BrokerConf()
+        conf = ClusterConf()
 
         ub = 'udp://127.0.0.1:5678'
         uw = 'udp://127.0.0.1:5789'
@@ -166,69 +179,178 @@ class TestBroker(ProcessHelperCase):
 
         self.assertEqual(wait_all(pidw, max_wait=2), [0])
 
+    def test_worker_participation(self):
+        conf = ClusterConf()
+
+        ub_front = 'udp://127.0.0.1:5678'
+        ub_back = 'udp://127.0.0.1:5679'
+        uw1 = 'udp://127.0.0.1'
+        uw2 = 'udp://127.0.0.1'
+
+        par_conf = WorkerConf(1, 13)
+
+        pidws = []
+
+        for uw in [uw1, uw2]:
+            pidw = self.ps.popen(
+                server_main_new,
+                lambda: (
+                    Worker[Request, Response],
+                    Worker(Request, Response, conf, ub_back, worker_function, None, par_conf=par_conf)
+                ),
+                {
+                    DEFAULT_GROUP: uw,
+                    BACKEND: 'unix://#bind'
+                },
+            )
+            pidws.append(pidw)
+
+        pidb = self.ps.popen(
+            server_main_new,
+            lambda: (
+                Broker[Request, Response],
+                Broker(Request, Response, conf=conf)
+            ),
+            {
+                DEFAULT_GROUP: ub_front,
+                BACKEND: ub_back,
+            }
+        )
+
+        with self.ps.timer(5.) as tr, client_transport(
+                Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
+            x: BrokerMetric = None
+            while x is None or x.workers < 2:
+                x = br.metrics()
+                tr.sleep(0.05)
+
+                trc('0').debug(x)
+
+        for pidw in pidws:
+            pidw.send_signal(SIGTERM)
+
+        pidb.send_signal(SIGTERM)
+
+        self.assertEqual(wait_all(*pidws + [pidb]), [0, 0, 0])
+
     def test_workflow_a(self):
-        conf = BrokerConf()
-        broker_addr = 'udp://127.0.0.1:7483'
+        conf = ClusterConf()
+        ub_front = 'udp://127.0.0.1:54546'
+        ub_back = 'udp://127.0.0.1:54540'
         res_addr = 'udp://127.0.0.1:7485?finished=finished_a'
         w_addr = 'udp://127.0.0.1'
 
-        brpo = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr, None)
-        wrpo = self.ps.popen(server_main_new, run_worker, {
-            DEFAULT_GROUP: w_addr,
-            BACKEND: 'unix://#bind'
-        }, conf, broker_addr)
-        repo = self.ps.popen(server_main, run_results, res_addr)
+        brpo = self.ps.popen(
+            server_main_new,
+            lambda: (
+                Broker[Request, Response],
+                Broker(Request, Response, conf=conf, url_results=res_addr)
+            ),
+            {
+                DEFAULT_GROUP: ub_front,
+                BACKEND: ub_back,
+            }
+        )
+        wrpo = self.ps.popen(
+            server_main_new,
+            lambda: (
+                Worker[Request, Response],
+                Worker(Request, Response, conf, ub_back, worker_function)
+            ),
+            {
+                DEFAULT_GROUP: w_addr,
+                BACKEND: 'unix://#bind'
+            }
+        )
+        repo = self.ps.popen(
+            server_main_new,
+            lambda: (ResultsReceiver, ResultsReceiver()),
+            {
+                DEFAULT_GROUP: res_addr,
+            }
+        )
 
         with self.ps.timer(5.) as tr, client_transport(
-                Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
+                Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
             x = 0
             while x == 0:
                 x = br.metrics().workers
                 tr.sleep(1.)
 
-        with client_transport(Broker[Request, Response], broker_addr) as br:
-            br.assign(Request(1))
+        with client_transport(Broker[Request, Response], ub_front) as br:
+            br: Broker[Request, Request]
+            br.assign(RPCKey.new(), Request(1))
 
         self.ps.wait([repo])
 
         wrpo.send_signal(SIGTERM)
 
-        with self.ps.timer(5.) as tr, client_transport(Broker[Request, Response], broker_addr) as br:
+        with self.ps.timer(5.) as tr, client_transport(Broker[Request, Response], ub_front) as br:
             x = 1
             while x > 0:
                 x = br.metrics().workers
                 tr.sleep(1)
 
+        with self.ps.timer(5.) as tr, client_transport(Broker[Request, Response], ub_front) as br:
+            ms = br.metrics()
+            self.assertEqual(0, ms.jobs)
+            self.assertEqual(0, ms.jobs_pending)
+            self.assertEqual(0, ms.assigned)
+
         brpo.send_signal(SIGTERM)
 
     def test_workflow_b(self):
-        conf = BrokerConf()
-        broker_addr = 'udp://127.0.0.1:7483'
+        conf = ClusterConf()
+        ub_front = 'udp://127.0.0.1:54546'
+        ub_back = 'udp://127.0.0.1:54540'
         res_addr = 'udp://127.0.0.1:7485?finished=finished_b'
         w_addr = 'udp://127.0.0.1'
 
-        a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr, None)
-        b = self.ps.popen(server_main_new, run_worker, {
-            DEFAULT_GROUP: w_addr,
-            BACKEND: 'unix://#bind'
-        }, conf, broker_addr)
-        c = self.ps.popen(server_main, run_results, res_addr)
+        a = self.ps.popen(
+            server_main_new,
+            lambda: (
+                Broker[Request, Response],
+                Broker(Request, Response, conf=conf, url_results=res_addr)
+            ),
+            {
+                DEFAULT_GROUP: ub_front,
+                BACKEND: ub_back,
+            }
+        )
+        b = self.ps.popen(
+            server_main_new,
+            lambda: (
+                Worker[Request, Response],
+                Worker(Request, Response, conf, ub_back, worker_function)
+            ),
+            {
+                DEFAULT_GROUP: w_addr,
+                BACKEND: 'unix://#bind'
+            }
+        )
+        c = self.ps.popen(
+            server_main_new,
+            lambda: (ResultsReceiver, ResultsReceiver()),
+            {
+                DEFAULT_GROUP: res_addr,
+            }
+        )
 
         with self.ps.timer(5.) as tr, client_transport(
-                Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
+                Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
             x = 0
             while x == 0:
                 x = br.metrics().workers
                 tr.sleep(1.)
 
-        with client_transport(Broker[Request, Response], broker_addr) as br:
-            br.assign(Request(1))
+        with client_transport(Broker[Request, Response], ub_front) as br:
+            br.assign(RPCKey.new(), Request(1))
 
         self.ps.wait([c])
 
         b.send_signal(SIGTERM)
 
-        with self.ps.timer(5.) as tr, client_transport(Broker[Request, Response], broker_addr) as br:
+        with self.ps.timer(5.) as tr, client_transport(Broker[Request, Response], ub_front) as br:
             x = 1
             while x > 0:
                 x = br.metrics().workers
@@ -238,72 +360,128 @@ class TestBroker(ProcessHelperCase):
 
         self.assertEqual(wait_all(a, b, c, max_wait=1), [0, 0, 0])
 
-    def test_kill_child(self):
-        conf = BrokerConf(heartbeat=0.5, max_pings=10)
-        broker_addr = 'udp://127.0.0.1:54546'
+    def test_kill_worker(self):
+        conf = ClusterConf(heartbeat=0.5, max_pings=5)
+        ub_front = 'udp://127.0.0.1:54546'
+        ub_back = 'udp://127.0.0.1:54540'
         res_addr = 'udp://127.0.0.1:54547'
         w_addr = 'udp://127.0.0.1:54548'
 
-        a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr, None)
-        b = self.ps.popen(server_main_new, run_worker, {
-            DEFAULT_GROUP: w_addr,
-            BACKEND: 'unix://#bind'
-        }, conf, broker_addr)
-        c = self.ps.popen(run_results, res_addr)
+        a = self.ps.popen(
+            server_main_new,
+            lambda: (
+                Broker[Request, Response],
+                Broker(Request, Response, conf=conf, url_results=res_addr)
+            ),
+            {
+                DEFAULT_GROUP: ub_front,
+                BACKEND: ub_back,
+            }
+        )
+
+        b = self.ps.popen(
+            server_main_new,
+            lambda: (
+                Worker[Request, Response],
+                Worker(
+                    Request, Response,
+                    conf, ub_back, worker_function, url_metrics=None, par_conf=WorkerConf(1, 2))
+            ),
+            {
+                DEFAULT_GROUP: w_addr,
+                BACKEND: 'unix://#bind'
+            },
+        )
+        c = self.ps.popen(
+            server_main_new,
+            lambda: (ResultsReceiver, ResultsReceiver()),
+            {
+                DEFAULT_GROUP: res_addr,
+            }
+        )
 
         logging.getLogger(__name__).warning('A')
 
         with self.ps.timer(5.) as tr, client_transport(
-                Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
+                Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
             x = 0
             while x == 0:
                 x = br.metrics().workers
+                trc('1').error('%s', x)
                 tr.sleep(1)
 
         logging.getLogger(__name__).warning('B')
 
-        with client_transport(Worker[Request, Response], w_addr) as w:
-            # w: Worker
-            os.kill(w.pid(), SIGKILL)
+        b.send_signal(SIGKILL)
 
         logging.getLogger(__name__).warning('C')
 
-        with self.ps.timer(5.) as tr, client_transport(Broker[Request, Response], broker_addr) as br:
+        with self.ps.timer(5.) as tr, client_transport(Broker[Request, Response], ub_front) as br:
+            br: Broker[Request, Response]
+
             x = 1
             while x > 0:
                 x = br.metrics().workers
+                trc('2').error('%s', x)
                 tr.sleep(1)
+
+            self.assertEqual(
+                BrokerMetric(
+                    0,
+                    0,
+                    0,
+                    0,
+                ),
+                br.metrics()
+            )
 
         logging.getLogger(__name__).warning('D')
 
         c.send_signal(SIGTERM)
         a.send_signal(SIGTERM)
 
-        self.assertEqual(wait_all(a, b, c, max_wait=1), [0, 0, 0])
+        self.assertEqual(wait_all(a, c, max_wait=1), [0, 0])
 
     def test_metrics(self):
         try:
-            conf = BrokerConf(metrics=0.5)
-            broker_addr = 'udp://127.0.0.1:7483'
+            conf = ClusterConf(metrics=0.5)
+            ub_front = 'udp://127.0.0.1:7483'
+            ub_back = 'udp://127.0.0.1:7484'
             metric_addr = 'udp://127.0.0.1:8845'
             w_addr = 'udp://127.0.0.1'
             w_addr_2 = 'udp://127.0.0.1'
 
             self.step()
 
-            a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr=None, url_metrics=metric_addr)
-            b = self.ps.popen(server_main_new, run_worker, {
-                DEFAULT_GROUP: w_addr,
-                BACKEND: 'unix://#bind'
-            }, conf, broker_addr,
-                              worker_fun=worker_function_sleeper,
-                              url_metrics=metric_addr)
+            a = self.ps.popen(
+                server_main_new,
+                lambda: (
+                    Broker[Request, Response],
+                    Broker(Request, Response, conf=conf, url_metrics=metric_addr)
+                ),
+                {
+                    DEFAULT_GROUP: ub_front,
+                    BACKEND: ub_back,
+                }
+            )
+            b = self.ps.popen(
+                server_main_new,
+                run_worker,
+                {
+                    DEFAULT_GROUP: w_addr,
+                    BACKEND: 'unix://#bind'
+                },
+                conf,
+                ub_back,
+                worker_fun=worker_function_sleeper,
+                url_metrics=metric_addr
+            )
             c = self.ps.popen(server_main, run_metrics, metric_addr)
 
             self.step()
 
-            with client_transport(Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
-                br.assign(Request(5))
+            with client_transport(Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
+                br.assign(RPCKey.new(), Request(5))
 
             self.step()
 
@@ -337,39 +515,78 @@ class TestBroker(ProcessHelperCase):
 
     def test_resign(self):
         # todo test double assignment
+        dtemp = mkdtemp()
         try:
-            conf = BrokerConf(metrics=0.5)
-            broker_addr = 'udp://127.0.0.1:7483'
+            conf = ClusterConf(metrics=0.5)
+            ub_front = 'udp://127.0.0.1:7483'
+            ub_back = 'udp://127.0.0.1:7484'
             metric_addr = 'udp://127.0.0.1:8845'
             w_addr = 'udp://127.0.0.1:5648'
             w_addr_2 = 'udp://127.0.0.1'
 
-            a = self.ps.popen(server_main, run_broker, broker_addr, conf, res_addr=None, url_metrics=metric_addr)
-            b = self.ps.popen(server_main_new, run_worker, {
-                DEFAULT_GROUP: w_addr,
-                BACKEND: 'unix://#bind'
-            }, conf, broker_addr,
-                              worker_fun=worker_function_resign,
-                              url_metrics=metric_addr)
+            a = self.ps.popen(
+                server_main_new,
+                lambda: (
+                    Broker[Request, Response],
+                    Broker(Request, Response, conf=conf, url_metrics=metric_addr)
+                ),
+                {
+                    DEFAULT_GROUP: ub_front,
+                    BACKEND: ub_back,
+                }
+            )
+            b = self.ps.popen(
+                server_main_new,
+                run_worker,
+                {
+                    DEFAULT_GROUP: w_addr,
+                    BACKEND: 'unix://#bind'
+                },
+                conf,
+                ub_back,
+                worker_fun=worker_function_resign,
+                url_metrics=metric_addr
+            )
             c = self.ps.popen(server_main, run_metrics, metric_addr)
 
-            with client_transport(Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
-                br.assign(Request(5, when=time_now() + timedelta(seconds=3)))
+            key = RPCKey.new()
+
+            self.step()
+
+            ftemp = os.path.join(dtemp, 'toucher')
+
+            with client_transport(Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
+                br: Broker[Request, Response]
+
+                br.assign(key, Request(5, where=ftemp))
 
             x = {}
+
+            self.step()
 
             with self.ps.timer(20) as tr, client_transport(MetricReceiver, metric_addr,
                                                            ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
                 while len(x) <= 1:
                     x = mr.metric_counts()
-                    logging.getLogger(__name__).debug(x)
+                    trc('1').debug(x)
                     tr.sleep(0.3)
 
-            with self.ps.timer(20) as tr:
-                tr.sleep(3)
+            self.step()
 
-            with client_transport(Worker[Request, Response], w_addr, ClientConfig(ignore_horizon=True)) as w:
-                w.resign()
+            with self.ps.timer(20) as tr:
+                tr.sleep(0.35)
+
+            self.step()
+
+            with client_transport(Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
+                br: Broker[Request, Response]
+
+                br.resign(key)
+
+            self.step()
+
+            with open(ftemp, 'w+') as _:
+                pass
 
             with self.ps.timer(20) as tr, client_transport(MetricReceiver, metric_addr,
                                                            ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
@@ -378,7 +595,7 @@ class TestBroker(ProcessHelperCase):
                     logging.getLogger(__name__).debug(x)
                     tr.sleep(0.3)
 
-            with client_transport(Broker[Request, Response], broker_addr, ClientConfig(ignore_horizon=True)) as br:
+            with client_transport(Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
                 self.assertEqual(0, br.metrics().jobs)
 
             b.send_signal(SIGTERM)
@@ -389,9 +606,11 @@ class TestBroker(ProcessHelperCase):
         except:
             logging.getLogger(__name__).exception('Now exiting')
             raise
+        finally:
+            shutil.rmtree(dtemp)
 
     def test_sending_to_unknown_host(self):
         metric_addr = 'udp://1asdasjdklasjdasd:8845'
 
         with client_transport(MetricReceiver, metric_addr) as mr:
-            mr.metrics(WorkerMetric(None, 'zex', 'udp://localhost'))
+            mr.metrics(WorkerMetric(None, 0, 0, 0, 0, ''))
