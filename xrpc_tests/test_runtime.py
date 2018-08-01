@@ -42,7 +42,7 @@ class TestRuntime(ProcessHelperCase):
 
             sleep(0.5)
 
-            with client_transport(ResetActor, ua, ClientConfig(ignore_horizon=True), origin=ua) as acli:
+            with client_transport(ResetActor, ua, ClientConfig(horz=False), origin=ua) as acli:
                 self.assertEqual(True, acli.stop())
 
             self.assertEqual(wait_all(a), [0])
@@ -58,7 +58,7 @@ class TestRuntime(ProcessHelperCase):
 
             sleep(0.5)
 
-            with client_transport(ResetStrActor, ua, ClientConfig(ignore_horizon=True), origin=ua) as acli:
+            with client_transport(ResetStrActor, ua, ClientConfig(horz=False), origin=ua) as acli:
                 self.assertEqual(True, acli.stop())
 
             self.assertEqual(wait_all(a), [0])

@@ -70,7 +70,7 @@ class TestMasquerade(ProcessHelperCase):
 
         a = self.ps.popen(server_main, masq_main, url_b)
 
-        with client_transport(BaseClass, req_url, xrpc.client.ClientConfig(ignore_horizon=True)) as b:
+        with client_transport(BaseClass, req_url, xrpc.client.ClientConfig(horz=False)) as b:
             self.assertEqual(b.recv_reply(5), 6)
 
         a.send_signal(SIGTERM)

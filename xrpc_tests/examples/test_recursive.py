@@ -24,7 +24,7 @@ class TestRecursive(ProcessHelperCase):
         url_b = 'udp://127.0.0.1:3456'
         a = self.ps.popen(server_main, recursive_main, url_b)
 
-        with client_transport(Recursive, url_b, ClientConfig(ignore_horizon=True)) as b:
+        with client_transport(Recursive, url_b, ClientConfig(horz=False)) as b:
             self.assertEqual(0, b.ep(10))
 
         a.send_signal(SIGTERM)
@@ -37,7 +37,7 @@ class TestRecursive(ProcessHelperCase):
         a = self.ps.popen(server_main, recursive_a_main, url_a, url_b)
         b = self.ps.popen(server_main, recursive_b_main, url_b)
 
-        with client_transport(RecursiveA, url_a, ClientConfig(ignore_horizon=True)) as acli:
+        with client_transport(RecursiveA, url_a, ClientConfig(horz=False)) as acli:
             self.assertEqual(1, acli.poll())
 
         a.send_signal(SIGTERM)
@@ -52,7 +52,7 @@ class TestRecursive(ProcessHelperCase):
         b = self.ps.popen(server_main, recursive_b_main, url_b)
 
         try:
-            with client_transport(RecursiveA, url_a, ClientConfig(ignore_horizon=True, timeout_total=2)) as acli:
+            with client_transport(RecursiveA, url_a, ClientConfig(horz=False, timeout_total=2)) as acli:
                 self.assertEqual(1, acli.poll())
         except TimeoutError:
             pass
@@ -63,7 +63,7 @@ class TestRecursive(ProcessHelperCase):
         url_b = 'udp://127.0.0.1:32457'
         b = self.ps.popen(server_main, recursive_b_main, url_b)
 
-        with client_transport(RecursiveB, url_b, ClientConfig(ignore_horizon=True)) as acli:
+        with client_transport(RecursiveB, url_b, ClientConfig(horz=False)) as acli:
             with self.assertRaises(ClientTransportCircuitBreaker):
                 acli.count_status()
 

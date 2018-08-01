@@ -24,7 +24,7 @@ class TestExc(ProcessHelperCase):
             }
         )
 
-        with client_transport(Lively, url_b_l, conf=ClientConfig(ignore_horizon=True, timeout_total=None)) as br:
+        with client_transport(Lively, url_b_l, conf=ClientConfig(horz=False, timeout_total=None)) as br:
             br.is_alive()
 
         b = self.ps.popen(
@@ -36,12 +36,12 @@ class TestExc(ProcessHelperCase):
             }
         )
 
-        with client_transport(Lively, url_a_l, conf=ClientConfig(ignore_horizon=True, timeout_total=None)) as br:
+        with client_transport(Lively, url_a_l, conf=ClientConfig(horz=False, timeout_total=None)) as br:
             br.is_alive()
 
         b.send_signal(SIGTERM)
 
-        with client_transport(Lively, url_a_l, conf=ClientConfig(ignore_horizon=True, timeout_total=1.)) as br:
+        with client_transport(Lively, url_a_l, conf=ClientConfig(horz=False, timeout_total=1.)) as br:
             while True:
                 try:
                     br.is_alive()

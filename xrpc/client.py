@@ -1,11 +1,11 @@
 import logging
 from contextlib import contextmanager
-from urllib.parse import urlparse, parse_qs, ParseResult, urlunparse
-
-from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial
 from typing import Optional, NamedTuple, Any, Type, ContextManager, TypeVar
+from urllib.parse import urlparse, parse_qs, ParseResult, urlunparse
+
+from dataclasses import dataclass, field
 
 from xrpc.dsl import RPCType
 from xrpc.error import TimeoutError, InvalidFingerprintError, HorizonPassedError, InternalError
@@ -19,7 +19,7 @@ from xrpc.util import time_now
 class ClientConfig(NamedTuple):
     timeout_resend: float = 0.033
     timeout_total: Optional[float] = 3.5
-    ignore_horizon: bool = False
+    horz: bool = True
     """If ```HorizonPassedError``` is passed, restart the action"""
 
 
@@ -149,7 +149,7 @@ class CallWrapper:
             try:
                 return RequestWrapper(self.type, self.name, self.alias)(*args, **kwargs)
             except HorizonPassedError:
-                if self.type.conf.ignore_horizon:
+                if not self.type.conf.horz:
                     continue
                 raise
 
@@ -170,11 +170,15 @@ T = TypeVar('T')
 @contextmanager
 def client_transport(
         rpc: Type[T],
-        dest='udp://127.0.0.1:7483',
-        conf=ClientConfig(timeout_total=5),
-        origin='udp://127.0.0.1'
+        dest: str = 'udp://127.0.0.1:7483',
+        conf: Optional[ClientConfig] = None,
+        origin: str = 'udp://127.0.0.1',
+        **kwargs
 ) -> ContextManager[T]:
     t = Transport.from_url(origin)
+
+    if conf is None:
+        conf = ClientConfig(**kwargs)
 
     def client_cb(p):
         raise ClientTransportCircuitBreaker(p)
