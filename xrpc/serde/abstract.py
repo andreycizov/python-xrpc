@@ -15,8 +15,10 @@ else:
 
 from dataclasses import dataclass, field
 
-DESER = Callable[[Union[list, dict, str, float, int]], Any]
-SER = Callable[[Any], Union[list, dict, str, float, int]]
+DESER_IN = Union[list, dict, str, float, int, Any]
+DESER = Callable[[DESER_IN], Any]
+SER_OUT = Union[list, dict, str, float, int, Any]
+SER = Callable[[Any], SER_OUT]
 
 
 def _repr_typevar(x):
