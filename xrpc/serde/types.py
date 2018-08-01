@@ -352,6 +352,7 @@ class UUIDSerde(SerdeType):
     def serializer(self, t: Any, deps: List[DESER]) -> DESER:
         def uuid_serializer(val: uuid.UUID):
             return val.hex
+
         return uuid_serializer
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
@@ -359,6 +360,7 @@ class UUIDSerde(SerdeType):
 
 
 ISO8601 = '%Y-%m-%dT%H:%M:%S.%f'
+ISO8601_DATE = '%Y-%m-%d'
 
 
 class DateTimeSerde(SerdeType):
@@ -376,6 +378,23 @@ class DateTimeSerde(SerdeType):
 
     def serializer(self, t: Any, deps: List[DESER]) -> DESER:
         return lambda val: format(val, ISO8601)
+
+
+class DateSerde(SerdeType):
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
+        if inspect.isclass(t):
+            return issubclass(t, datetime.date)
+        else:
+            return False
+
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        return SerdeNode(t, [])
+
+    def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
+        return lambda val: time_parse(val, ISO8601_DATE).date()
+
+    def serializer(self, t: Any, deps: List[DESER]) -> DESER:
+        return lambda val: format(val, ISO8601_DATE)
 
 
 class ListDeserializer(SerdeTypeDeserializer):
@@ -421,11 +440,23 @@ class ListSerde(SerdeType):
 class TupleDeserializer(ListDeserializer):
     cls_coll = tuple
 
+    def __call__(self, val: Union[list, dict]) -> Any:
+        self.d, *_ = self.deps
+
+        if len(val) != len(self.deps):
+            raise SerdeException(val, 'tpl_len')
+
+        return tuple(d(x) for d, x in zip(self.deps, val))
+
 
 class TupleSerializer(TupleDeserializer, SerdeTypeSerializer):
 
     def __call__(self, val: Union[list, dict]) -> Any:
-        return list(super().__call__(val))
+
+        if len(val) != len(self.deps):
+            raise SerdeException(val, 'tpl_len')
+
+        return [d(x) for d, x in zip(self.deps, val)]
 
 
 class TupleSerde(SerdeType):
