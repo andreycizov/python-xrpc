@@ -1,11 +1,9 @@
 import logging
 import os
-import shutil
 from _signal import SIGTERM, SIGKILL
 from datetime import datetime, timedelta
-from tempfile import mkdtemp
 from time import sleep
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from collections import defaultdict
 from dataclasses import dataclass
@@ -14,7 +12,7 @@ from xrpc.client import ClientConfig, client_transport
 from xrpc.dsl import RPCType, rpc, regular, signal, DEFAULT_GROUP
 from xrpc.error import TerminationException
 from xrpc.impl.broker import Broker, Worker, ClusterConf, MetricCollector, NodeMetric, WorkerMetric, BACKEND, \
-    WorkerConf, BrokerMetric
+    WorkerConf, BrokerMetric, BrokerResult, BrokerConf
 from xrpc.logging import LoggerSetup, LL
 from xrpc.net import RPCKey
 from xrpc.popen import wait_all
@@ -70,6 +68,34 @@ class ResultsReceiver:
         return 1.
 
 
+@dataclass
+class BPResultsReceiver(BrokerResult[Response]):
+    def __init__(self):
+        self.enabled = False
+        self.hit_count = 0
+        self.results: Dict[RPCKey, Response] = {}
+
+    @rpc(RPCType.Repliable)
+    def enable(self):
+        self.enabled = True
+
+    @rpc(RPCType.Repliable)
+    def count(self) -> Tuple[int, int]:
+        return len(self.results), self.hit_count
+
+    @rpc(RPCType.Signalling)
+    def finished(self, jid: RPCKey, jres: Response):
+        if self.enabled:
+            self._finished_ack(jid)
+            self.results[jid] = jres
+
+        self.hit_count += 1
+
+    @signal()
+    def exit(self):
+        raise TerminationException()
+
+
 class MetricReceiver(MetricCollector):
     def __init__(self) -> None:
         self.metrics_by_type = defaultdict(list)
@@ -105,34 +131,23 @@ def worker_function_sleeper(req: Request) -> Response:
 
 
 def worker_function_resign(req: Request) -> Response:
-    logging.getLogger('worker_function_resign').warning('%s', req)
-
     if not os.path.exists(req.where):
         sleep(999999)
 
     return Response(99)
 
 
-def run_broker(broker_addr, conf, res_addr=None, url_metrics=None):
-    rpc = Broker[Request, Response](
-        Request,
-        Response,
-        conf,
-        res_addr,
-        url_metrics,
-    )
-    return Broker[Request, Response], rpc
+def worker_function_raise(req: Request) -> Response:
+    if not os.path.exists(req.where):
+        raise ValueError()
+
+    return Response(99)
 
 
-def run_worker(conf, broker_addr, url_metrics=None, worker_fun=None):
-    if worker_fun is None:
-        worker_fun = worker_function
-    rpc = Worker(Request, Response, conf, broker_addr, worker_fun, url_metrics)
-    return Worker[Request, Response], rpc
-
-
-def run_results(addr):
-    return ResultsReceiver, ResultsReceiver()
+def worker_function_retry(req: Request) -> Response:
+    while not os.path.exists(req.where):
+        sleep(0.03)
+    return Response(req.val_req + 8)
 
 
 def run_metrics(addr):
@@ -150,26 +165,47 @@ class TestBroker(ProcessHelperCase):
             LL('xrpc.loop', logging.INFO),
         ], ['stream:///stderr'])
 
-    def test_worker_startup(self):
-        conf = ClusterConf()
-
-        ub = 'udp://127.0.0.1:5678'
-        uw = 'udp://127.0.0.1:5789'
-        par_conf = WorkerConf()
-        pidw = self.ps.popen(
+    def _worker(self, w_addr, *args, **kwargs):
+        return self.ps.popen(
             server_main_new,
             lambda: (
                 Worker[Request, Response],
-                Worker(Request, Response, conf, ub, worker_function, None, par_conf=par_conf)
+                Worker(
+                    Request, Response,
+                    *args, **kwargs
+                )
             ),
             {
-                DEFAULT_GROUP: uw,
+                DEFAULT_GROUP: w_addr,
                 BACKEND: 'unix://#bind'
             },
         )
 
+    def _broker(self, ub_front, ub_back, **kwargs):
+        return self.ps.popen(
+            server_main_new,
+            lambda: (
+                Broker[Request, Response],
+                Broker(Request, Response, **kwargs)
+            ),
+            {
+                DEFAULT_GROUP: ub_front,
+                BACKEND: ub_back,
+            }
+        )
+
+    def _test_worker_startup(self, par_conf: WorkerConf):
+        conf = ClusterConf()
+
+        ub = 'udp://127.0.0.1:5678'
+        uw = 'udp://127.0.0.1:5789'
+
+        pidw = self._worker(
+            uw, conf, ub, worker_function, None, par_conf=par_conf
+        )
+
         with self.ps.timer(5.) as tr, client_transport(
-                Worker[Request, Response], uw, ClientConfig(ignore_horizon=True)) as br:
+                Worker[Request, Response], uw, ClientConfig(horz=False)) as br:
             x: Optional[WorkerMetric] = None
             while x is None or x.workers_free < par_conf.processes * par_conf.threads:
                 x = br.metrics()
@@ -178,6 +214,15 @@ class TestBroker(ProcessHelperCase):
         pidw.send_signal(SIGTERM)
 
         self.assertEqual(wait_all(pidw, max_wait=2), [0])
+
+    def test_worker_startup__default(self):
+        self._test_worker_startup(WorkerConf())
+
+    def test_worker_startup__1_32(self):
+        self._test_worker_startup(WorkerConf(1, 32))
+
+    def test_worker_startup__1_64(self):
+        self._test_worker_startup(WorkerConf(1, 64))
 
     def test_worker_participation(self):
         conf = ClusterConf()
@@ -192,33 +237,23 @@ class TestBroker(ProcessHelperCase):
         pidws = []
 
         for uw in [uw1, uw2]:
-            pidw = self.ps.popen(
-                server_main_new,
-                lambda: (
-                    Worker[Request, Response],
-                    Worker(Request, Response, conf, ub_back, worker_function, None, par_conf=par_conf)
-                ),
-                {
-                    DEFAULT_GROUP: uw,
-                    BACKEND: 'unix://#bind'
-                },
+            pidw = self._worker(
+                uw,
+                conf=conf,
+                url_broker=ub_back,
+                fn=worker_function,
+                par_conf=par_conf,
             )
             pidws.append(pidw)
 
-        pidb = self.ps.popen(
-            server_main_new,
-            lambda: (
-                Broker[Request, Response],
-                Broker(Request, Response, conf=conf)
-            ),
-            {
-                DEFAULT_GROUP: ub_front,
-                BACKEND: ub_back,
-            }
+        pidb = self._broker(
+            ub_front,
+            ub_back,
+            conf=conf,
         )
 
         with self.ps.timer(5.) as tr, client_transport(
-                Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
+                Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
             x: BrokerMetric = None
             while x is None or x.workers < 2:
                 x = br.metrics()
@@ -240,27 +275,17 @@ class TestBroker(ProcessHelperCase):
         res_addr = 'udp://127.0.0.1:7485?finished=finished_a'
         w_addr = 'udp://127.0.0.1'
 
-        brpo = self.ps.popen(
-            server_main_new,
-            lambda: (
-                Broker[Request, Response],
-                Broker(Request, Response, conf=conf, url_results=res_addr)
-            ),
-            {
-                DEFAULT_GROUP: ub_front,
-                BACKEND: ub_back,
-            }
+        brpo = self._broker(
+            ub_front,
+            ub_back,
+            conf=conf,
+            url_results=res_addr
         )
-        wrpo = self.ps.popen(
-            server_main_new,
-            lambda: (
-                Worker[Request, Response],
-                Worker(Request, Response, conf, ub_back, worker_function)
-            ),
-            {
-                DEFAULT_GROUP: w_addr,
-                BACKEND: 'unix://#bind'
-            }
+        wrpo = self._worker(
+            w_addr,
+            conf=conf,
+            url_broker=ub_back,
+            fn=worker_function
         )
         repo = self.ps.popen(
             server_main_new,
@@ -271,7 +296,7 @@ class TestBroker(ProcessHelperCase):
         )
 
         with self.ps.timer(5.) as tr, client_transport(
-                Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
+                Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
             x = 0
             while x == 0:
                 x = br.metrics().workers
@@ -306,27 +331,14 @@ class TestBroker(ProcessHelperCase):
         res_addr = 'udp://127.0.0.1:7485?finished=finished_b'
         w_addr = 'udp://127.0.0.1'
 
-        a = self.ps.popen(
-            server_main_new,
-            lambda: (
-                Broker[Request, Response],
-                Broker(Request, Response, conf=conf, url_results=res_addr)
-            ),
-            {
-                DEFAULT_GROUP: ub_front,
-                BACKEND: ub_back,
-            }
+        a = self._broker(
+            ub_front,
+            ub_back,
+            conf=conf,
+            url_results=res_addr
         )
-        b = self.ps.popen(
-            server_main_new,
-            lambda: (
-                Worker[Request, Response],
-                Worker(Request, Response, conf, ub_back, worker_function)
-            ),
-            {
-                DEFAULT_GROUP: w_addr,
-                BACKEND: 'unix://#bind'
-            }
+        b = self._worker(
+            w_addr, conf=conf, url_broker=ub_back, fn=worker_function
         )
         c = self.ps.popen(
             server_main_new,
@@ -337,7 +349,7 @@ class TestBroker(ProcessHelperCase):
         )
 
         with self.ps.timer(5.) as tr, client_transport(
-                Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
+                Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
             x = 0
             while x == 0:
                 x = br.metrics().workers
@@ -367,31 +379,8 @@ class TestBroker(ProcessHelperCase):
         res_addr = 'udp://127.0.0.1:54547'
         w_addr = 'udp://127.0.0.1:54548'
 
-        a = self.ps.popen(
-            server_main_new,
-            lambda: (
-                Broker[Request, Response],
-                Broker(Request, Response, conf=conf, url_results=res_addr)
-            ),
-            {
-                DEFAULT_GROUP: ub_front,
-                BACKEND: ub_back,
-            }
-        )
-
-        b = self.ps.popen(
-            server_main_new,
-            lambda: (
-                Worker[Request, Response],
-                Worker(
-                    Request, Response,
-                    conf, ub_back, worker_function, url_metrics=None, par_conf=WorkerConf(1, 2))
-            ),
-            {
-                DEFAULT_GROUP: w_addr,
-                BACKEND: 'unix://#bind'
-            },
-        )
+        a = self._broker(ub_front, ub_back, conf=conf, url_results=res_addr)
+        b = self._worker(w_addr, conf, ub_back, fn=worker_function, url_metrics=None, par_conf=WorkerConf(1, 2))
         c = self.ps.popen(
             server_main_new,
             lambda: (ResultsReceiver, ResultsReceiver()),
@@ -403,7 +392,7 @@ class TestBroker(ProcessHelperCase):
         logging.getLogger(__name__).warning('A')
 
         with self.ps.timer(5.) as tr, client_transport(
-                Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
+                Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
             x = 0
             while x == 0:
                 x = br.metrics().workers
@@ -431,6 +420,7 @@ class TestBroker(ProcessHelperCase):
                     0,
                     0,
                     0,
+                    0,
                 ),
                 br.metrics()
             )
@@ -453,41 +443,26 @@ class TestBroker(ProcessHelperCase):
 
             self.step()
 
-            a = self.ps.popen(
-                server_main_new,
-                lambda: (
-                    Broker[Request, Response],
-                    Broker(Request, Response, conf=conf, url_metrics=metric_addr)
-                ),
-                {
-                    DEFAULT_GROUP: ub_front,
-                    BACKEND: ub_back,
-                }
-            )
-            b = self.ps.popen(
-                server_main_new,
-                run_worker,
-                {
-                    DEFAULT_GROUP: w_addr,
-                    BACKEND: 'unix://#bind'
-                },
+            a = self._broker(ub_front, ub_back, conf=conf, url_metrics=metric_addr)
+            b = self._worker(
+                w_addr,
                 conf,
                 ub_back,
-                worker_fun=worker_function_sleeper,
+                fn=worker_function_sleeper,
                 url_metrics=metric_addr
             )
             c = self.ps.popen(server_main, run_metrics, metric_addr)
 
             self.step()
 
-            with client_transport(Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
+            with client_transport(Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
                 br.assign(RPCKey.new(), Request(5))
 
             self.step()
 
             x = {}
             with self.ps.timer(20) as tr, client_transport(MetricReceiver, metric_addr,
-                                                           ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
+                                                           ClientConfig(horz=False, timeout_total=3)) as mr:
                 while len(x) <= 1:
                     x = mr.metric_counts()
                     logging.getLogger(__name__).debug(x)
@@ -496,7 +471,7 @@ class TestBroker(ProcessHelperCase):
             self.step()
 
             with self.ps.timer(20) as tr, client_transport(MetricReceiver, metric_addr,
-                                                           ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
+                                                           ClientConfig(horz=False, timeout_total=3)) as mr:
                 while len(x) >= 2:
                     x = mr.metric_counts()
                     logging.getLogger(__name__).debug(x)
@@ -515,102 +490,296 @@ class TestBroker(ProcessHelperCase):
 
     def test_resign(self):
         # todo test double assignment
-        dtemp = mkdtemp()
-        try:
-            conf = ClusterConf(metrics=0.5)
-            ub_front = 'udp://127.0.0.1:7483'
-            ub_back = 'udp://127.0.0.1:7484'
-            metric_addr = 'udp://127.0.0.1:8845'
-            w_addr = 'udp://127.0.0.1:5648'
-            w_addr_2 = 'udp://127.0.0.1'
+        dtemp = self.dtemp
 
-            a = self.ps.popen(
-                server_main_new,
-                lambda: (
-                    Broker[Request, Response],
-                    Broker(Request, Response, conf=conf, url_metrics=metric_addr)
-                ),
-                {
-                    DEFAULT_GROUP: ub_front,
-                    BACKEND: ub_back,
-                }
-            )
-            b = self.ps.popen(
-                server_main_new,
-                run_worker,
-                {
-                    DEFAULT_GROUP: w_addr,
-                    BACKEND: 'unix://#bind'
-                },
-                conf,
-                ub_back,
-                worker_fun=worker_function_resign,
-                url_metrics=metric_addr
-            )
-            c = self.ps.popen(server_main, run_metrics, metric_addr)
+        conf = ClusterConf(metrics=0.5)
+        ub_front = 'udp://127.0.0.1:7483'
+        ub_back = 'udp://127.0.0.1:7484'
+        metric_addr = 'udp://127.0.0.1:8845'
+        w_addr = 'udp://127.0.0.1:5648'
+        w_addr_2 = 'udp://127.0.0.1'
 
-            key = RPCKey.new()
+        a = self._broker(
+            ub_front,
+            ub_back,
+            conf=conf,
+        url_metrics=metric_addr)
 
-            self.step()
+        b = self._worker(
+            w_addr,
+            conf,
+            ub_back,
+            fn=worker_function_resign,
+            url_metrics=metric_addr
+        )
 
-            ftemp = os.path.join(dtemp, 'toucher')
+        c = self.ps.popen(server_main, run_metrics, metric_addr)
 
-            with client_transport(Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
-                br: Broker[Request, Response]
+        key = RPCKey.new()
 
-                br.assign(key, Request(5, where=ftemp))
+        self.step()
 
-            x = {}
+        ftemp = os.path.join(dtemp, 'toucher')
 
-            self.step()
+        with client_transport(Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
+            br: Broker[Request, Response]
 
-            with self.ps.timer(20) as tr, client_transport(MetricReceiver, metric_addr,
-                                                           ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
-                while len(x) <= 1:
-                    x = mr.metric_counts()
-                    trc('1').debug(x)
-                    tr.sleep(0.3)
+            br.assign(key, Request(5, where=ftemp))
 
-            self.step()
+        x = {}
 
-            with self.ps.timer(20) as tr:
-                tr.sleep(0.35)
+        self.step()
 
-            self.step()
+        with self.ps.timer(20) as tr, client_transport(MetricReceiver, metric_addr,
+                                                       ClientConfig(horz=False, timeout_total=3)) as mr:
+            while len(x) <= 1:
+                x = mr.metric_counts()
+                trc('1').debug(x)
+                tr.sleep(0.3)
 
-            with client_transport(Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
-                br: Broker[Request, Response]
+        self.step()
 
-                br.resign(key)
+        with self.ps.timer(20) as tr:
+            tr.sleep(0.35)
 
-            self.step()
+        self.step()
 
-            with open(ftemp, 'w+') as _:
-                pass
+        with client_transport(Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
+            br: Broker[Request, Response]
 
-            with self.ps.timer(20) as tr, client_transport(MetricReceiver, metric_addr,
-                                                           ClientConfig(ignore_horizon=True, timeout_total=3)) as mr:
-                while len(x) >= 2:
-                    x = mr.metric_counts()
-                    logging.getLogger(__name__).debug(x)
-                    tr.sleep(0.3)
+            br.resign(key)
 
-            with client_transport(Broker[Request, Response], ub_front, ClientConfig(ignore_horizon=True)) as br:
-                self.assertEqual(0, br.metrics().jobs)
+        self.step()
 
-            b.send_signal(SIGTERM)
-            c.send_signal(SIGTERM)
-            a.send_signal(SIGTERM)
+        with open(ftemp, 'w+') as _:
+            pass
 
-            self.assertEqual(wait_all(a, b, c, max_wait=5), [0, 0, 0])
-        except:
-            logging.getLogger(__name__).exception('Now exiting')
-            raise
-        finally:
-            shutil.rmtree(dtemp)
+        with self.ps.timer(20) as tr, client_transport(MetricReceiver, metric_addr,
+                                                       ClientConfig(horz=False, timeout_total=3)) as mr:
+            while len(x) >= 2:
+                x = mr.metric_counts()
+                logging.getLogger(__name__).debug(x)
+                tr.sleep(0.3)
+
+        with client_transport(Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
+            self.assertEqual(0, br.metrics().jobs)
+
+        b.send_signal(SIGTERM)
+        c.send_signal(SIGTERM)
+        a.send_signal(SIGTERM)
+
+        self.assertEqual(wait_all(a, b, c, max_wait=5), [0, 0, 0])
+
+    def test_worker_patchup(self):
+        dtemp = self.dtemp
+
+        conf = ClusterConf(
+            heartbeat=0.5,
+            metrics=0.5,
+        )
+
+        par_conf = WorkerConf()
+
+        ub_front = 'udp://127.0.0.1:7483'
+        ub_back = 'udp://127.0.0.1:7484'
+        w_addr = 'udp://127.0.0.1:5648'
+        w_addr_2 = 'udp://127.0.0.1'
+
+        a = self._broker(
+            ub_front,
+            ub_back,
+            conf=conf,
+        )
+
+        b = self._worker(
+            w_addr,
+            conf,
+            ub_back,
+            fn=worker_function_raise,
+        )
+
+        key = RPCKey.new()
+
+        self.step('assign')
+
+        ftemp = os.path.join(dtemp, 'toucher')
+
+        with client_transport(Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
+            br: Broker[Request, Response]
+
+            br.assign(key, Request(5, where=ftemp))
+
+        self.step('wait_until_assigned')
+
+        def get_metrics():
+            with client_transport(Broker[Request, Response], ub_front,
+                                                           ClientConfig(horz=False, timeout_total=3)) as mr:
+                mr: Broker[Request, Response]
+                r = mr.metrics()
+                trc().error('%s', r)
+                return r
+
+        x = get_metrics()
+
+        with self.ps.timer(20) as tr:
+            while x.jobs < 1:
+                x = get_metrics()
+                tr.sleep(0.01)
+
+        self.step('job_assigned')
+
+        with self.ps.timer(20) as tr:
+            tr.sleep(0.35)
+
+        self.step('create_ftemp')
+
+        with open(ftemp, 'w+') as _:
+            pass
+
+        self.step('wait_done')
+
+        with self.ps.timer(20) as tr:
+            while x.jobs > 0 and x.capacity < par_conf.total:
+                x = get_metrics()
+                tr.sleep(0.01)
+
+        with client_transport(Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
+            self.assertEqual(0, br.metrics().jobs)
+
+        self.step('wait_term')
+
+        b.send_signal(SIGTERM)
+        a.send_signal(SIGTERM)
+
+        self.assertEqual(wait_all(a, b, max_wait=5), [0, 0])
+
+    def test_backpressure(self):
+        conf = ClusterConf(heartbeat=0.5, max_pings=5)
+        backlog = 4
+
+        br_conf = BrokerConf(
+            backlog=backlog,
+            flush_backlog=0,
+        )
+
+        wr_conf = WorkerConf(1, backlog)
+
+        jobs_total = 10
+        jobs_cancel = 2
+
+        ub_front = 'udp://127.0.0.1:54546'
+        ub_back = 'udp://127.0.0.1:54540'
+        ur_front = 'udp://127.0.0.1:54547'
+        uw_front = 'udp://127.0.0.1:54548'
+
+        a = self._broker(ub_front, ub_back, conf=conf, url_results=ur_front, par_conf=br_conf)
+        b = self._worker(uw_front, conf=conf, url_broker=ub_back, fn=worker_function_retry, url_metrics=None,
+                         par_conf=wr_conf)
+        c = self.ps.popen(
+            server_main_new,
+            lambda: (BPResultsReceiver, BPResultsReceiver()),
+            {
+                DEFAULT_GROUP: ur_front
+            }
+        )
+
+        tots = 0
+        failed = 0
+
+        self.step('assign')
+
+        flock = os.path.join(self.dtemp, 'lock')
+
+        ok_keys = []
+
+        with client_transport(Broker[Request, Response], dest=ub_front, horz=False) as br:
+            br: Broker[Request, Response]
+            with self.ps.timer(2) as tr:
+                for i in range(jobs_total):
+                    key = RPCKey.new()
+                    res = br.assign(key, Request(i * 1000, where=flock))
+                    tots += 1
+                    if not res:
+                        failed += 1
+                    else:
+                        ok_keys.append(key)
+                    tr.sleep(0.01)
+
+        jobs_to_fail = tots - br_conf.backlog
+        jobs_to_ok = br_conf.backlog
+
+        self.assertEqual(jobs_to_fail, failed)
+
+        self.step('check_cancel')
+
+        assert jobs_cancel < jobs_to_ok
+
+        with client_transport(Broker[Request, Response], dest=ub_front, horz=False) as br:
+            br: Broker[Request, Response]
+            with self.ps.timer(2) as tr:
+                for _, key in zip(range(jobs_cancel), ok_keys):
+                    self.assertEqual(True, br.cancel(key))
+
+        jobs_to_ok -= jobs_cancel
+
+        self.step('check_backpressure')
+
+        with open(flock, 'w+'):
+            pass
+
+        self.step('job_barrier')
+
+        x = 0
+
+        with client_transport(Broker[Request, Response], dest=ub_front, horz=False) as br:
+            br: Broker[Request, Response]
+            with self.ps.timer(2) as tr:
+                x = 0
+                while x < jobs_to_ok:
+                    x = br.metrics().flushing
+                    tr.sleep(0.01)
+
+        self.assertEqual(jobs_to_ok, x)
+
+        self.step('res_check')
+
+        hc_now = None
+        hc_after = None
+
+        with client_transport(BPResultsReceiver, dest=ur_front, horz=False) as rr:
+            rr: BPResultsReceiver
+            _, hc_now = rr.count()
+
+            self.assertLess(0, hc_now)
+
+            self.step('res_barrier')
+
+            rr.enable()
+
+            r = 0
+            with self.ps.timer(2) as tr:
+                while r < jobs_to_ok:
+                    r, hc_after = rr.count()
+                tr.sleep(0.01)
+
+            self.assertEqual(jobs_to_ok, r)
+
+            self.assertLess(hc_after, hc_now + 5)
+
+        b.send_signal(SIGTERM)
+        c.send_signal(SIGTERM)
+        a.send_signal(SIGTERM)
+
+        self.assertEqual(wait_all(a, b, c, max_wait=5), [0, 0, 0])
 
     def test_sending_to_unknown_host(self):
         metric_addr = 'udp://1asdasjdklasjdasd:8845'
 
         with client_transport(MetricReceiver, metric_addr) as mr:
             mr.metrics(WorkerMetric(None, 0, 0, 0, 0, ''))
+
+# todo Test Backpressure
+# todo Test Cancellations
+# todo Test Random kills of the workers/subworkers
+# todo Test Tandem/massive
+# todo Test Broker switch w or w/out state preservation
