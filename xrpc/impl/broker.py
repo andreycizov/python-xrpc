@@ -819,6 +819,42 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType], Brok
             self.jobs_pending_assign.push(SchedKey.now(jid))
             reset(self.push_assign, 0)
 
+    @rpc(RPCType.Repliable)
+    def query(
+            self,
+            since: Optional[RPCKey] = None,
+            until: Optional[RPCKey] = None,
+            order_by: Optional[Tuple[str, bool]] = None,
+            limit: Optional[int] = None
+    ) -> Optional[List[Tuple[RPCKey, JobState[RequestType, ResponseType]]]]:
+        items = self.jobs.items()
+
+        if order_by:
+            order_by_field, order_by_forward = order_by
+
+            order_by_field_defn = [x for x in fields(JobState) if x.name == order_by_field]
+
+            if not len(order_by_field_defn):
+                return None
+
+            items = sorted(items, key=lambda x: getattr(x[1], order_by_field))
+
+        if limit:
+            items = items[:limit]
+
+        r = []
+
+        for k, v in items:
+            if since is not None and k < since:
+                continue
+
+            if until is not None and k > until:
+                continue
+
+            r.append((k, v))
+
+        return r
+
     def _brid_check(self, brid: RPCKey):
         wid = sender()
         if self.workers_brids.get(wid) != brid:
