@@ -170,7 +170,10 @@ def masquerade(origin: str, orig: Type[TA], new: Type[TB], **map: str) -> str:
     return _masquerade(origin, cache_get(orig), cache_get(new), **map)
 
 
-def service(obj: Type[T], dest: Origin, conf: ClientConfig = ClientConfig(), group=None) -> T:
+def service(obj: Type[T], dest: Origin, conf: Optional[ClientConfig] = None, group=None, **kwargs) -> T:
+    if conf is None:
+        conf = ClientConfig(**kwargs)
+
     ctx = context()
 
     defn = cache_get(obj)
