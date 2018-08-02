@@ -1,9 +1,10 @@
 import logging
 import sys
 from typing import TypeVar, Tuple, List, Dict
-from dataclasses import dataclass, is_dataclass
 
-from xrpc.serde.abstract import SerdeStepContext, _repr_typevar
+from dataclasses import is_dataclass
+
+from xrpc.serde.abstract import SerdeStepContext
 
 
 def build_generic_context(t, ctx=SerdeStepContext()):
@@ -68,7 +69,7 @@ def build_generic_context(t, ctx=SerdeStepContext()):
 
         return t, ctx
     else:
-        if not hasattr(t, '_gorg'):
+        if not hasattr(t, '_gorg') or t.__args__ is None:
             return t, ctx
 
         pars, args = t._gorg.__parameters__, t.__args__ if t.__args__ else t._gorg.__parameters__
