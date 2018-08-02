@@ -18,6 +18,7 @@ from dataclasses import field, dataclass
 from xrpc.actor import run_server
 from xrpc.logging import LoggerSetup, LL, logging_setup
 from xrpc.popen import PopenStack, cov, popen, _popen_defn
+from xrpc.trace import trc
 from xrpc.util import time_now
 
 
@@ -144,8 +145,8 @@ class ProcessHelperCase(unittest.TestCase):
         return LoggerSetup(LL(None, DEFAULT_LEVEL), [
         ], ['stream:///stderr'])
 
-    def step(self):
-        logging.getLogger(self.__class__.__name__).warning(f'[{next(self.steps)}]')
+    def step(self, s=None):
+        trc(f'STEP.{next(self.steps)}', depth=2).warning('%s', s if s else '')
 
     def make_ph(self):
         r = ProcessHelper(self._get_ls())
