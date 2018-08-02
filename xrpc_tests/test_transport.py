@@ -1,7 +1,7 @@
+import shutil
 from tempfile import mkdtemp
 from urllib.parse import urlunparse, urlparse
 
-import shutil
 from dataclasses import replace
 
 from xrpc.transport import Transport, Packet, select_helper, _insert_ordered
@@ -28,10 +28,6 @@ class TestUDPTransport(ProcessHelperCase):
     def test_cool(self):
         with Transport.from_url('udp://0.0.0.0:23454') as t:
             pass
-
-    def test_sendto(self):
-        with Transport.from_url('udp://0.0.0.0:23454') as t:
-            t.send(Packet(('127.0.0.1', 12), b''))
 
     def test_sendto_url(self):
         with Transport.from_url('udp://0.0.0.0:23454') as t:

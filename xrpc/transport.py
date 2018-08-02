@@ -227,6 +227,8 @@ class UDPTransport(Transport):
             assert pr.scheme == 'udp' and pr.port is not None, pr
 
             addr = (pr.hostname, int(pr.port))
+        else:
+            raise NotImplementedError(repr(addr))
 
         log_tr_net_raw_out.debug('[%d] %s %s', len(packet.data), addr, packet.data)
 
