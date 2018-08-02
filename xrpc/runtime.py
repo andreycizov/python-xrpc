@@ -10,6 +10,7 @@ from xrpc.loop import EventLoop
 from xrpc.service import ServiceDefn
 from xrpc.trace import log_tr_exec_in, log_tr_exec_out, trc
 from xrpc.transport import Origin
+from xrpc.util import time_now
 
 RUNTIME_TL = threading.local()
 CTX_NAME = 'rpc_config'
@@ -34,6 +35,8 @@ class ExecutionContext:
 
         idx = context_push(self)
 
+        t_start = time_now()
+
         log_tr_exec_in.debug('[%s %s] Name=%s %s %s %s %s', idx, __origin, __fn, is_ok, args, kwargs, r)
 
         try:
@@ -41,6 +44,12 @@ class ExecutionContext:
             is_ok = True
             return r
         finally:
+            t_end = time_now()
+            secs = (t_start - t_end).total_seconds()
+
+            if secs > 0.01:
+                log_tr_exec_out.error('[%s %s], Name=%s (%s)', idx, __origin, __fn, secs)
+
             log_tr_exec_out.debug('[%s %s] Name=%s %s %s %s %s', idx, __origin, __fn, is_ok, args, kwargs, r)
             context_pop(idx)
 
