@@ -70,7 +70,7 @@ class RegularRunner(Terminating, TerminatingHandler):
 
         self.states_regulars: Dict[str, Optional[datetime]] = {
             k: time_now() + timedelta(seconds=x.conf.initial) if x.conf.initial is not None else None for k, x in
-        self.regulars.items()
+            self.regulars.items()
         }
 
         # if we make sure that max_wait is called for every execution of select_
@@ -111,6 +111,9 @@ class RegularRunner(Terminating, TerminatingHandler):
             with self.exc_ctx(reg_def):
                 self.states_regulars[name] = None
                 x: float = self.actor.ctx().exec('reg', reg_def.fn)
+
+                if x is not None and x < 0:
+                    trc().error('%s (%s < 0)', name, x)
 
                 if x is not None:
                     self.states_regulars[name] = time_now() + timedelta(seconds=x)
