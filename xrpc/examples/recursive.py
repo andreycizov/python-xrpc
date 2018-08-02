@@ -13,7 +13,7 @@ class Recursive:
     def ep(self, a: int) -> int:
         assert a > 0
 
-        s = service(Recursive, origin(), ClientConfig(timeout_total=1., ignore_horizon=True))
+        s = service(Recursive, origin(), ClientConfig(timeout_total=1., horz=False))
 
         if a == 1:
             return 0
@@ -37,7 +37,7 @@ class RecursiveA:
 
     @rpc()
     def poll(self, name: str = 'running') -> int:
-        s = service(RecursiveB, self.url, ClientConfig(timeout_total=1., ignore_horizon=True))
+        s = service(RecursiveB, self.url, ClientConfig(timeout_total=1., horz=False))
 
         return s.count_status(name)
 
@@ -57,7 +57,7 @@ class RecursiveB:
 
     @rpc()
     def count_status(self, name: str = 'running') -> int:
-        s = service(RecursiveA, sender(), ClientConfig(timeout_total=1., ignore_horizon=True))
+        s = service(RecursiveA, sender(), ClientConfig(timeout_total=1., horz=False))
 
         return len([x for x in s.status() if x == name])
 
