@@ -16,6 +16,10 @@ class ResetActor:
         reset(self.stopper, 0)
         return True
 
+    @rpc(exc=True)
+    def exc(self, _: BaseException) -> bool:
+        return True
+
     @regular(initial=None)
     def stopper(self):
         raise TerminationException()
@@ -25,6 +29,10 @@ class ResetStrActor:
     @rpc(RPCType.Repliable)
     def stop(self) -> bool:
         reset('stopper', 0)
+        return True
+
+    @rpc(exc=True)
+    def exc(self, _: BaseException) -> bool:
         return True
 
     @regular(initial=None)
