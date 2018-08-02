@@ -184,6 +184,9 @@ class SignalRunnerRef(Terminating):
     par: 'SignalRunner'
     idx: int
 
+    def __getattr__(self, item):
+        return getattr(self.par, item)
+
     def terminate(self):
         self.par.remove(self.idx)
 
@@ -231,6 +234,17 @@ class SignalRunner(LoggingActor, TerminatingHandler):
         ))
 
         self.logger('tran.est').debug('%s', self.path_unix)
+
+    def _fork_transport_patch(self):
+        # unsafe
+
+        if self.has_transport:
+            self.has_transport = None
+            self.path_temp = None
+            self.tran_ref.remove()
+            self.tran = None
+
+            self.establish_transport()
 
     def demolish_transport(self):
         self.tran_ref.remove()
@@ -646,7 +660,7 @@ def actor_create(
     act.add(regr, 'regular')
     act.add(sior)
 
-    act.add(sr.add(act, sigs.to_signal_map()))
+    act.add(sr.add(act, sigs.to_signal_map()), 'signal')
 
     return act
 
