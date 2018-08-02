@@ -522,8 +522,10 @@ class RPCGroupRunner(Terminating, TerminatingHandler):
 
 
 class Actor(Terminating, LoggingActor):
-    def __init__(self, el: EventLoop):
+    def __init__(self, el: EventLoop, name: Optional[str] = None):
         self.el = el
+
+        self.name = name
 
         self.idx_ctr = count()
         self.terms: Dict[int, Terminating] = {}
@@ -563,19 +565,19 @@ class Actor(Terminating, LoggingActor):
             del self.names_terms[name]
 
     def terminate(self, why=None):
-        self.logger('term').info('Terminating %s %s', why, self)
+        self.logger('term').info('Terminating %s %s %s', self.name, why, self)
 
         for k, v in list(self.chans.items()):
             del self.chans[k]
 
             tran = self.el.transport(v).remove()
 
-            self.logger('term.tran').info('Closing %s %s', k, v)
+            self.logger('term.tran').info('Closing %s %s %s', self.name, k, v)
             tran.close()
 
         for k, v in list(self.terms.items()):
             del self.terms[k]
-            self.logger('term.act').info('Terminating %s %s', why, v)
+            self.logger('term.act').info('Terminating %s %s %s', self.name, why, v)
             v.terminate()
 
     def ctx(self, **kwargs) -> ExecutionContext:
@@ -594,7 +596,9 @@ class Actor(Terminating, LoggingActor):
 def actor_create(
         el: EventLoop,
         sr: SignalRunner,
-        cls, cls_inst, bind_urls: Dict[str, str], horizon_each=60.
+        cls, cls_inst, bind_urls: Dict[str, str],
+        horizon_each=60.,
+        name: Optional[str] = None
 ) -> 'Actor':
     if isinstance(bind_urls, list):
         assert len(bind_urls) == 1, bind_urls
@@ -614,7 +618,7 @@ def actor_create(
 
     assert len(rpc_requested) == 0, rpc_requested
 
-    act = Actor(el)
+    act = Actor(el, name=name)
 
     for tran_grp in tran_grps:
         trc('tran').debug('%s %s', tran_grp, bind_urls[tran_grp])
@@ -647,11 +651,14 @@ def actor_create(
     return act
 
 
-def run_server(cls, cls_inst, bind_urls: Dict[str, str], horizon_each=60.):
+def run_server(cls, cls_inst, bind_urls: Dict[str, str], horizon_each=60., actor_name=None):
     el = EventLoop()
     sr = SignalRunner(el)
 
-    act = actor_create(el, sr, cls, cls_inst, bind_urls, horizon_each)
+    if actor_name is None:
+        actor_name = cls.__name__
+
+    act = actor_create(el, sr, cls, cls_inst, bind_urls, horizon_each, name=actor_name)
 
     try:
         el.loop()
