@@ -236,9 +236,12 @@ class EventLoop:
             if max_wait_left is not None and max_wait_left == 0:
                 break
 
-    def recv_connabt(self, idx: int, has_data):
-        while True:
+    def recv_connabt(self, idx: int, has_data, max_iter=5):
+        for ctr in count():
             if idx not in self.transports:
+                return
+
+            if ctr >= max_iter:
                 return
 
             transport = self.transports[idx]
