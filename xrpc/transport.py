@@ -65,6 +65,8 @@ class Packet:
 
         y = Packet(addr, buffer[4:size + 4].tobytes())
 
+        assert len(buffer) == size + 4, (len(buffer), size + 4)
+
         return y
 
 
@@ -286,7 +288,7 @@ class UnixTransport(UDPTransport):
 
         should_bind = parsed.fragment == 'bind'
 
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         sock.setblocking(False)
         sock.settimeout(0)
 
@@ -368,12 +370,15 @@ class UnixTransport(UDPTransport):
         log_tr_net_raw_out.debug('[%d] %s %s', len(packet.data), addr, packet.data)
 
         try:
-            return sock.send(packet.pack())
+            r = sock.send(packet.pack())
+            trc('return').debug('%s', r)
+            return r
         except BrokenPipeError as e:
             self._clean_client_id(addr, str(e))
+            log_tr_net_raw_err.error('[%d] %s %s', len(packet.data), addr, packet.data)
             # todo should we raise or should we ignore the error ?
             # todo upstream possibly needs to know when a client was disconnected
-            raise ConnectionAbortedError(addr, str(e))
+            #raise ConnectionAbortedError(addr, str(e))
 
     def read(self, polled_flags: Optional[List[bool]] = None) -> Iterable[Packet]:
         if polled_flags is None:
