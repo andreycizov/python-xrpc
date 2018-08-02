@@ -2,8 +2,6 @@ import base64
 import json
 import struct
 import zlib
-
-from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import NamedTuple, Any
@@ -11,6 +9,7 @@ from uuid import UUID, uuid4
 
 import bitstruct
 import pytz
+from dataclasses import dataclass, field
 
 from xrpc.serde.types import ISO8601
 from xrpc.util import time_now
@@ -50,10 +49,14 @@ def time_unpack(body: bytes) -> datetime:
     return datetime(**{k: v for k, v in to_unpack if not k.startswith('_')}, tzinfo=pytz.utc)
 
 
-@dataclass(eq=True, frozen=True)
+@dataclass(eq=True, frozen=True, order=True)
 class RPCKey:
     timestamp: datetime = field(default_factory=time_now)
     uuid: UUID = field(default_factory=uuid4)
+
+    @classmethod
+    def null(cls, timestamp: datetime):
+        return RPCKey(timestamp, UUID(bytes=b'\x00' * 16))
 
     @classmethod
     def new(cls):
@@ -77,6 +80,10 @@ class RPCKey:
         uuid = UUID(bytes=body[RPC_TS_COMPILED_SIZE:])
 
         return RPCKey(timestamp=timestamp, uuid=uuid)
+
+    @classmethod
+    def unpack_str(cls, val: str) -> 'RPCKey':
+        return cls.unpack(base64.b64decode(val, altchars=b'_-'))
 
     def __repr__(self):
         return f'{self.__class__.__name__}({self.timestamp:{ISO8601}} {self.uuid.hex})'
