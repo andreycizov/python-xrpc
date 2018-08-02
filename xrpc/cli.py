@@ -3,7 +3,7 @@ import sys
 from argparse import ArgumentParser
 from typing import Any, TypeVar, Type, Dict, List, Optional
 
-from dataclasses import fields, dataclass, MISSING, _MISSING_TYPE
+from dataclasses import fields, dataclass, MISSING
 
 from xrpc.generic import build_generic_context
 from xrpc.logging import _dict_split_prefix
@@ -70,8 +70,6 @@ class Parsable:
             else:
                 default = f.default
 
-                assert default is not MISSING, f
-
             type_ = f.type
 
             name = f'{f.name}'
@@ -91,6 +89,15 @@ class Parsable:
             if hasattr(f, '__doc__'):
                 help = f.__doc__
 
+            if True:
+
+                if help:
+                    help += ' '
+                else:
+                    help = ''
+
+                help += '(default: %(default)s)'
+
             type_action = {}
             if conf.type:
                 type_action['type'] = conf.type
@@ -98,10 +105,12 @@ class Parsable:
             if conf.action:
                 type_action['action'] = conf.action
 
+            if default is not MISSING:
+                type_action['default'] = default
+
             argparse.add_argument(
                 *conf.names,
                 dest=dest,
-                default=default,
                 help=help,
                 **type_action
             )
