@@ -337,7 +337,10 @@ class NoneSerde(SerdeType):
         return deser
 
     def serializer(self, t: Any, deps: List[DESER]) -> DESER:
-        return lambda val: None
+        def ser(val):
+            assert val is None, val
+            return None
+        return ser
 
 
 class UUIDSerde(SerdeType):
