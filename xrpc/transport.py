@@ -1,19 +1,20 @@
 import logging
 import os
 import select
-import shutil
-import socket
 import struct
 import tempfile
-from typing import Iterable, Dict, NamedTuple, Type, List, Optional, TypeVar, Generic, Tuple
 from urllib.parse import ParseResult, urlparse, urlunparse
 
+import shutil
+import socket
 from dataclasses import dataclass
+from typing import Iterable, Dict, NamedTuple, Type, List, Optional, TypeVar, Generic, Tuple
 
 from xrpc.net import json_pack, json_unpack, RPCPacket
 from xrpc.serde.abstract import SerdeStruct
 from xrpc.trace import log_tr_net_raw_out, log_tr_net_raw_err, log_tr_net_raw_in, log_tr_net_meta_out, \
     log_tr_net_meta_in, log_tr_net_obj_out, log_tr_net_obj_in, log_tr_net_sel_err, log_tr_net_sel_in, trc
+from xrpc.util import _log_called_from
 
 Origin = str
 
@@ -365,6 +366,9 @@ class UnixTransport(UDPTransport):
 
         if addr not in self._fd_clients:
             log_tr_net_raw_err.error('Drop %s %s %s', self, addr, packet)
+            for x in self._fd_clients.keys():
+                log_tr_net_raw_err.getChild('dump').error('%s', x)
+            _log_called_from(log_tr_net_raw_err.getChild('tb'))
             return
 
         sock = self._fd_clients[addr]
