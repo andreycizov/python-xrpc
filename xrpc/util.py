@@ -27,7 +27,7 @@ def time_now() -> datetime:
 
 
 def time_parse(v, format) -> datetime:
-    return pytz.utc.localize(datetime.strptime(v, format))
+    return datetime.strptime(v, format).replace(tzinfo=pytz.utc)
 
 
 def _build_callstack(ignore=1):
