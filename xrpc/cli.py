@@ -1,9 +1,10 @@
 import inspect
 import sys
-from argparse import ArgumentParser
-from typing import Any, TypeVar, Type, Dict, List, Optional
 
+from argparse import ArgumentParser
 from dataclasses import fields, dataclass, MISSING
+from datetime import timedelta
+from typing import Any, TypeVar, Type, Dict, List, Optional
 
 from xrpc.generic import build_generic_context
 from xrpc.logging import _dict_split_prefix
@@ -32,7 +33,7 @@ def is_list(t):
 
 
 def _guess_type_action(dest, type_, default) -> ParsableConf:
-    action = None
+    action = 'store'
 
     if is_union(type_):
         args = type_.__args__
@@ -49,6 +50,8 @@ def _guess_type_action(dest, type_, default) -> ParsableConf:
             action = 'store_false'
         else:
             action = 'store_true'
+    elif type_ is timedelta:
+        type_ = lambda x: timedelta(seconds=int(x))
     elif is_list(type_):
         type_, = type_.__args__
         action = 'append'
