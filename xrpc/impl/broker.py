@@ -1,16 +1,18 @@
 import logging
 import os
 import random
+import traceback
+from collections import deque
+from contextlib import ExitStack
+from inspect import getfullargspec, ismethod
+
+import threading
 import types
 from argparse import ArgumentParser
-from contextlib import ExitStack
-from datetime import datetime, timedelta
-from inspect import getfullargspec, ismethod
-from signal import SIGKILL, SIGTERM
-from typing import Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple, Union, List, Any, Iterable, Set
-
-from collections import deque
 from dataclasses import dataclass, fields
+from datetime import datetime, timedelta
+from signal import SIGKILL, SIGTERM, SIGINT
+from typing import Callable, Optional, Dict, Deque, TypeVar, Generic, Type, Tuple, Union, List, Any, Iterable, Set
 
 from xrpc.abstract import KeyedQueue
 from xrpc.actor import run_server
@@ -27,7 +29,7 @@ from xrpc.serde.types import build_types, ARGS_RET, PairSpec
 from xrpc.service import ServiceDefn
 from xrpc.trace import trc
 from xrpc.transport import Origin, Transport
-from xrpc.util import time_now
+from xrpc.util import time_now, signal_context
 
 
 @dataclass
@@ -77,6 +79,9 @@ class BrokerMetric:
     jobs: int
     assigned: int
 
+    resigns: int
+    dones: int
+
     @property
     def running(self) -> int:
         return self.jobs_pending + self.assigned
@@ -113,10 +118,33 @@ def get_func_types(fn: WorkerCallable) -> Tuple[Type[RequestType], Type[Response
 
 
 def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, unix_url: str):
+    def sigint_handler(code, frame):
+        stack_list = traceback.StackSummary.extract(
+            traceback.walk_stack(frame),
+            limit=None,
+            capture_locals=True,
+        )
+        stack_list.reverse()
+
+        for f, x in zip(stack_list, traceback.format_list(stack_list)):
+            locs = None
+
+            if hasattr(f, 'locals'):
+                locs = f.locals
+
+            xs = x.split('\n')
+            if len(xs) and xs[-1] == '':
+                xs = xs[:-1]
+            for y in xs:
+                logging.getLogger('traceback').error('%s', y)
+
+            # logging.getLogger('traceback.locals').error('%s', locs)
+
     with ExitStack() as es:
         stacks = [
             logging_setup(logger_config),
             circuitbreaker(main_logger='broker'),
+            signal_context(signals=(SIGINT,), handler=sigint_handler)
         ]
 
         for stack in stacks:
@@ -136,7 +164,10 @@ def worker_inst(logger_config: LoggerSetup, fn: WorkerCallable, unix_url: str):
             should_inst = True
 
         if should_inst:
-            run_server(WorkerInst[cls_req, cls_res], WorkerInst(fn), {DEFAULT_GROUP: unix_url})
+            run_server(WorkerInst[cls_req, cls_res], WorkerInst(fn), {
+                DEFAULT_GROUP: unix_url,
+                BACKEND: 'unix://#bind'
+            })
 
 
 class ForkException(BaseException):
@@ -168,21 +199,79 @@ class WorkerForkInst:
         return None
 
 
-class WorkerInst(Generic[RequestType, ResponseType]):
+def worker_thread_main(fn, unix_url: str):
+    cls_req, cls_res = get_func_types(fn)
+
+    run_server(WorkerThreadInst[cls_req, cls_res], WorkerThreadInst(fn), {
+        DEFAULT_GROUP: unix_url
+    })
+
+
+class WorkerThreadInst(Generic[RequestType, ResponseType]):
     def __init__(self, fn: WorkerCallable):
         self.fn = fn
         self.cls_req, self.cls_res = get_func_types(self.fn)
 
+    @regular()
+    def init(self) -> Optional[float]:
+        x: WorkerInst[self.cls_req, self.cls_res] = service(WorkerInst[self.cls_req, self.cls_res], origin())
+        x.bk_started()
+        return None
+
     @rpc(RPCType.Signalling)
-    def put(self, payload: Optional[RequestType]):
+    def put(self, payload: RequestType):
         ret = self.fn(payload)
 
-        s = service(Worker[self.cls_req, self.cls_res], origin())
+        x: WorkerInst[self.cls_req, self.cls_res] = service(WorkerInst[self.cls_req, self.cls_res], origin())
+        x.bk_done(ret)
+
+
+BACKEND = 'backend'
+
+
+class WorkerInst(Generic[RequestType, ResponseType]):
+    def __init__(self, fn: WorkerCallable):
+        self.fn = fn
+        self.cls_req, self.cls_res = get_func_types(self.fn)
+        self.started = False
+        self.thread_addr: Optional[str] = None
+        self.thread = None
+
+    @rpc(RPCType.Signalling)
+    def put(self, payload: Optional[RequestType]):
+        s: WorkerThreadInst[self.cls_req, self.cls_res] = service(
+            WorkerThreadInst[self.cls_req, self.cls_res],
+            self.thread_addr,
+            group=BACKEND,
+        )
+        s.put(payload)
+
+    @rpc(RPCType.Signalling, group=BACKEND)
+    def bk_started(self):
+        self.thread_addr = sender()
+        reset(self.check_started, None)
+        reset(self.announce, 0)
+
+    @rpc(RPCType.Signalling, group=BACKEND)
+    def bk_done(self, ret: ResponseType):
+        s = service(Worker[self.cls_req, self.cls_res], origin(DEFAULT_GROUP), group=DEFAULT_GROUP)
         s.bk_done(ret)
 
-    @rpc(exc=True)
+    @rpc(exc=True, group=BACKEND)
     def bk_exc(self, exc: ConnectionAbortedError) -> bool:
+        trc().error('Lost connection to the worker thread')
         raise TerminationException()
+
+    @rpc(exc=True)
+    def exc(self, exc: ConnectionAbortedError) -> bool:
+        raise TerminationException()
+
+    @regular()
+    def start_bg(self):
+        self.thread = threading.Thread(target=worker_thread_main, args=(self.fn, origin(BACKEND)))
+        self.thread.daemon = True
+        self.thread.start()
+        self.started = True
 
     @regular()
     def announce(self) -> Optional[float]:
@@ -191,7 +280,11 @@ class WorkerInst(Generic[RequestType, ResponseType]):
 
         return None
 
-    @signal()
+    @regular(initial=5)
+    def check_started(self):
+        raise TerminationException()
+
+    @signal(codes=(SIGTERM,))
     def exit(self):
         raise TerminationException()
 
@@ -201,8 +294,6 @@ class WorkerLoad:
     occupied: int = 0
     capacity: int = 0
 
-
-BACKEND = 'backend'
 
 SchedKeyQueue = KeyedQueue[datetime, RPCKey, 'SchedKey']
 
@@ -315,7 +406,10 @@ class Worker(Generic[RequestType, ResponseType], WorkerAnnounce):
             self._start_worker_inst()
         return None
 
-    def _free(self, jid: RPCKey) -> str:
+    def _free(self, jid: RPCKey) -> Optional[str]:
+        if jid not in self.jobs_workers:
+            return None
+
         wid = self.jobs_workers[jid]
         del self.jobs_workers[jid]
         del self.workers_jobs[wid]
@@ -325,16 +419,20 @@ class Worker(Generic[RequestType, ResponseType], WorkerAnnounce):
         del self.jobs[jid]
         wid = self._free(jid)
 
-        if wid in self.workers_free:
-            del self.workers_free[wid]
+        if jid in self.jobs_res:
+            del self.jobs_res[jid]
 
-        wpid = self.worker_addrs[wid]
-        del self.worker_addrs[wid]
+        if wid is not None:
+            if wid in self.workers_free:
+                del self.workers_free[wid]
 
-        self.load.capacity -= 1
-        self.load.occupied -= 1
+            wpid = self.worker_addrs[wid]
+            del self.worker_addrs[wid]
 
-        os.kill(wpid, SIGKILL)
+            self.load.capacity -= 1
+            self.load.occupied -= 1
+
+            os.kill(wpid, SIGKILL)
 
     def _fork(self):
         sel_wfid = random.choice(list(self.workers_fork_addrs.keys()))
@@ -430,9 +528,8 @@ class Worker(Generic[RequestType, ResponseType], WorkerAnnounce):
             reset(self.push_announce, 0)
             return
 
-        if jid in self.jobs:
-            del self.jobs[jid]
-            del self.jobs_res[jid]
+        if jid in self.jobs_res:
+            self._evict(jid)
 
             if jid in self.jobs_pending_done:
                 del self.jobs_pending_done[jid]
@@ -460,6 +557,10 @@ class Worker(Generic[RequestType, ResponseType], WorkerAnnounce):
     def push_fork(self) -> Optional[float]:
         while len(self.workers_fork):
             wid = self.workers_fork.popleft()
+
+            if self.load.capacity >= self.par_conf.total:
+                continue
+
             s = service(WorkerForkInst, wid, group=BACKEND)
             # this specific call _may_ cause the event loop to re-loop.
             s.fork()
@@ -623,7 +724,8 @@ class JobState(Generic[RequestType, ResponseType]):
 
 
 class BrokerResult(Generic[ResponseType]):
-    def _finished_ack(self, jid: RPCKey):
+    @staticmethod
+    def _finished_ack(jid: RPCKey):
         s = service(BrokerFlushAck, sender(), group=DEFAULT_GROUP)
         s.flush_ack(jid)
 
@@ -679,6 +781,11 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType], Brok
 
         self.jobs_cancel: Set[RPCKey] = set()
 
+        self.resigns = 0
+        self.dones = 0
+
+        # todo transform broker to a ticket-based system instead
+
     def _job_new(self, jid: RPCKey, jreq: RequestType):
         trc('0').debug('%s %s', jid, jreq)
 
@@ -696,6 +803,8 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType], Brok
         return wid
 
     def _job_resign(self, jid: RPCKey):
+        self.resigns += 1
+
         self._job_clean(jid)
 
         if jid in self.jobs_pending:
@@ -715,6 +824,8 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType], Brok
             reset(self.push_push_assign, 0)
 
     def _job_done(self, jid: RPCKey, jres: ResponseType):
+        self.dones += 1
+
         self._job_clean(jid)
         self.jobs[jid].finished = time_now()
         self.jobs[jid].res = jres
@@ -837,6 +948,8 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType], Brok
             if not len(order_by_field_defn):
                 return None
 
+            items = [x for x in items if getattr(x[1], order_by_field) is not None]
+
             items = sorted(items, key=lambda x: getattr(x[1], order_by_field))
 
         if limit:
@@ -887,6 +1000,8 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType], Brok
         if jid in self.jobs_pending_assign:
             del self.jobs_pending_assign[jid]
 
+        self._worker_pings(brid, sdr)
+
         if ok:
             return
         else:
@@ -917,6 +1032,11 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType], Brok
         if jid in self.jobs_pending_resign:
             del self.jobs_pending_resign[jid]
 
+        if jid not in self.jobs_workers or sender() != self.jobs_workers[jid]:
+            return
+
+        self._worker_pings(brid, sender())
+
         if ok:
             self._job_done(jid, res)
         else:
@@ -930,6 +1050,8 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType], Brok
             len(self.jobs_pending),
             len(self.jobs),
             len(self.jobs_workers),
+            self.resigns,
+            self.dones
         )
 
     @regular(initial=None)
@@ -1039,6 +1161,17 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType], Brok
         if wid in self.workers:
             self._worker_lost(wid)
 
+    def _worker_pings(self, brid: RPCKey, wid: str):
+        if wid not in self.workers:
+            return
+
+        if self.workers_brids[wid] != brid:
+            return
+
+        wst = self.workers[wid]
+
+        wst.pings_remaining = self.conf.max_pings
+
     @rpc(type=RPCType.Signalling, group=BACKEND)
     def bk_announce(self, wbrid: Optional[RPCKey], load: WorkerLoad):
         wid = sender()
@@ -1061,7 +1194,7 @@ class Broker(Generic[RequestType, ResponseType], BrokerEntry[ResponseType], Brok
         flag_changed = wst.load.capacity != load.capacity
 
         wst.load.capacity = load.capacity
-        wst.pings_remaining = self.conf.max_pings
+        self._worker_pings(brid, wid)
 
         if flag_changed:
             self._worker_conf_changed()

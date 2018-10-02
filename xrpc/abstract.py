@@ -1,8 +1,8 @@
 import heapq
-from datetime import datetime
-from typing import TypeVar, Generic, List, Optional, Dict, Tuple, Callable, Type
-
 from collections import deque
+
+from datetime import datetime
+from typing import TypeVar, Generic, List, Optional, Dict, Tuple, Callable, Type, Iterator
 
 from xrpc.util import time_now
 
@@ -70,6 +70,9 @@ class Queue(Generic[V]):
     def peek(self) -> Optional[V]:
         raise NotImplementedError()
 
+    def iter(self) -> Iterator[V]:
+        raise NotImplementedError()
+
 
 class BinaryQueue(Queue[V]):
     def __init__(self, initial: Optional[List[V]] = None):
@@ -85,6 +88,10 @@ class BinaryQueue(Queue[V]):
         bq = BinaryQueue()
         bq.h = deque(self.h)
         return bq
+
+    def iter(self) -> Iterator[V]:
+        for x in self.h:
+            yield x
 
     def push(self, val: V):
         if len(self.h) == 0:
@@ -147,6 +154,15 @@ class HeapQueue(Queue[V]):
     def __len__(self):
         return len(self.h)
 
+    def iter(self) -> Iterator[V]:
+        copy = self.copy()
+
+        while True:
+            try:
+                yield copy.pop()
+            except IndexError:
+                return
+
     def copy(self) -> 'Queue':
         hq = HeapQueue()
         hq.h = list(self.h)
@@ -186,6 +202,7 @@ class KeyedQueue(Generic[Ord, K, V], Queue[V]):
         self.key_fn = key
 
         self.next_ctr: Dict[K, int] = {}
+        self.ref_ctr: Dict[K, int] = {}
         self.values: Dict[K, V] = {}
 
         self.q_cls = q_cls
@@ -195,14 +212,33 @@ class KeyedQueue(Generic[Ord, K, V], Queue[V]):
             for x in initial:
                 self.push(x)
 
+    def get(self, key: K, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
     def __len__(self):
         return len(self.values)
+
+    def __getitem__(self, key: K):
+        return self.values[key]
 
     def __delitem__(self, key: K):
         del self.values[key]
 
     def __contains__(self, key: K):
         return key in self.values
+
+    def keys(self):
+        return self.values.keys()
+
+    def iter(self) -> Iterator[V]:
+        for _, key, idx in self.q.iter():
+            if not self._pop_checks(key, idx):
+                continue
+
+            yield self.values[key]
 
     def copy(self):
         khq = KeyedQueue(ord=self.ord_fn, key=self.key_fn, q_cls=self.q_cls)
@@ -217,25 +253,40 @@ class KeyedQueue(Generic[Ord, K, V], Queue[V]):
 
         if key not in self.next_ctr:
             self.next_ctr[key] = 0
+            self.ref_ctr[key] = 0
 
         idx = self.next_ctr[key]
         self.next_ctr[key] += 1
+        self.ref_ctr[key] += 1
 
         self.values[key] = val
 
         self.q.push((ord_, key, idx))
 
+    def _pop_checks(self, key, idx):
+        if key not in self.values:
+            return False
+
+        # this will not work, if a newer item had been subsequently added
+
+        if self.next_ctr[key] - 1 != idx:
+            return False
+
+        return True
+
     def pop(self) -> V:
         while True:
             ord_, key, idx = self.q.pop()
 
-            if key not in self.values:
+            if not self._pop_checks(key, idx):
                 continue
 
-            if self.next_ctr[key] - 1 != idx:
-                continue
+            self.ref_ctr[key] -= 1
 
-            del self.next_ctr[key]
+            if self.ref_ctr[key] == 0:
+                if key in self.next_ctr:
+                    del self.next_ctr[key]
+                del self.ref_ctr[key]
             return_ = self.values[key]
             del self.values[key]
 

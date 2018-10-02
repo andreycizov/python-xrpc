@@ -1,4 +1,5 @@
 import unittest
+
 from typing import TypeVar, List, Type
 
 from xrpc.abstract import BinaryQueue, Queue, HeapQueue, KeyedQueue
@@ -96,10 +97,59 @@ class TestStruct(unittest.TestCase):
                     q.push((len(a2), 2))
                     self.assertEqual([1, 2, 2, 3, 3, 3], [ord_fn(x) for x in ex(q)], )
 
+                with self.subTest('queue_002'):
+                    q = q_cls(a2, ord=ord_fn, key=key_fn, q_cls=sq_cls)
+                    q.push((len(a2), 3))
+                    self.assertEqual([1, 2, 3, 3, 3, 3], [ord_fn(x) for x in ex(q)], )
+
+                with self.subTest('queue_002'):
+                    q = q_cls(a2, ord=ord_fn, key=key_fn, q_cls=sq_cls)
+                    q.push((len(a2), 3))
+                    self.assertEqual(1, ord_fn(q.pop()))
+                    self.assertEqual(2, ord_fn(q.pop()))
+                    self.assertEqual(3, ord_fn(q.pop()))
+                    q.push((len(a2) + 1, 2))
+                    q.push((len(a2) + 2, 3))
+                    self.assertEqual(2, ord_fn(q.pop()))
+                    self.assertEqual(3, ord_fn(q.pop()))
+                    self.assertEqual(3, ord_fn(q.pop()))
+                    self.assertEqual(3, ord_fn(q.pop()))
+                    self.assertEqual(3, ord_fn(q.pop()))
+
+                    self.assertEqual([], [ord_fn(x) for x in ex(q)], )
+
                 with self.subTest('queue_003'):
                     q = q_cls(a2, ord=ord_fn, key=key_fn, q_cls=sq_cls)
                     q.push((len(a2), 0))
                     self.assertEqual([0, 1, 2, 3, 3, 3], [ord_fn(x) for x in ex(q)], )
+
+                with self.subTest('queue_00300'):
+                    q = q_cls(a2, ord=ord_fn, key=key_fn, q_cls=sq_cls)
+                    # [1, 2, 3, 3, 3]
+                    q.push((0, 0))
+                    q.push((0, 1))
+                    q.push((0, 3))
+                    del q[0]
+                    q.push((0, 5))
+                    #self.assertEqual((0, 2), q.pop())
+                    self.assertEqual([2, 3, 3, 3, 5], [ord_fn(x) for x in q.iter()])
+
+                with self.subTest('queue_00301'):
+                    q = q_cls(a2, ord=ord_fn, key=key_fn, q_cls=sq_cls)
+                    # [1, 2, 3, 3, 3]
+                    q.push((0, 0))
+                    q.push((0, 1))
+                    q.push((0, 1))
+                    q.push((0, 1))
+                    q.push((0, 0))
+                    self.assertEqual((0, 0), q.pop())
+                    q.push((0, 5))
+                    self.assertEqual([2, 3, 3, 3, 5], [ord_fn(x) for x in q.iter()])
+
+                with self.subTest('queue_0031'):
+                    q = q_cls(a2, ord=ord_fn, key=key_fn, q_cls=sq_cls)
+                    q.push((0, 5))
+                    self.assertEqual([2, 3, 3, 3, 5], [ord_fn(x) for x in q.iter()])
 
                 with self.subTest('queue_004'):
                     q = q_cls(a2, ord=ord_fn, key=key_fn, q_cls=sq_cls)
