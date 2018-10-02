@@ -2,17 +2,17 @@ import base64
 import logging
 import multiprocessing
 import os
-import signal
-import subprocess
 import sys
 import zlib
 from contextlib import ExitStack, contextmanager
+
+import dill
+import signal
+import subprocess
+from attr import dataclass
 from datetime import timedelta
 from time import sleep
 from typing import Callable, Any, Tuple, Dict, List, Optional
-
-import dill
-from attr import dataclass
 
 from xrpc.util import signal_context, time_now, _build_callstack
 
@@ -145,6 +145,8 @@ def popen_main():
 
         with signal_context(signals=codes, handler=popen_signal_handler) as prev_handlers:
             prev_handler = {k: v for k, v in zip(codes, prev_handlers)}
+
+            defn = None
 
             try:
                 defn: PopenStruct = _popen_defn()
