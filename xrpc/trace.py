@@ -40,7 +40,7 @@ def trc(postfix: Optional[str] = None, *, depth=1) -> logging.Logger:
     """
     x = inspect.stack()[depth]
 
-    code = inspect.currentframe().f_back.f_code
+    code = x[0].f_code
     func = [obj for obj in gc.get_referrers(code) if inspect.isfunction(obj)][0]
 
     mod = inspect.getmodule(x.frame)
