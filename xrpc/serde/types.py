@@ -1,11 +1,12 @@
 import base64
-import datetime
 import inspect
 import logging
 import sys
-import uuid
 from enum import Enum
 from inspect import FullArgSpec
+
+import datetime
+import uuid
 
 from xrpc.generic import build_generic_context as _build_generic_context
 from xrpc.serde.error import SerdeException
@@ -357,6 +358,23 @@ class UUIDSerde(SerdeType):
 
     def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
         return lambda val: uuid.UUID(hex=val)
+
+
+class TimeDeltaSerde(SerdeType):
+    def match(self, t: Any, ctx: SerdeStepContext) -> bool:
+        if inspect.isclass(t):
+            return issubclass(t, datetime.timedelta)
+        else:
+            return False
+
+    def step(self, i: SerdeInst, t: Any, ctx: SerdeStepContext) -> SerdeNode:
+        return SerdeNode(t, [])
+
+    def deserializer(self, t: Any, deps: List[DESER]) -> DESER:
+        return lambda val: datetime.timedelta(seconds=val)
+
+    def serializer(self, t: Any, deps: List[DESER]) -> DESER:
+        return lambda val: val.total_seconds()
 
 
 ISO8601 = '%Y-%m-%dT%H:%M:%S.%f'

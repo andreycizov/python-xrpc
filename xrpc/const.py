@@ -11,6 +11,7 @@ SERVER_SERDE_ITEMS = [
     types.UnionSerde(),
     types.BytesSerde(),
     types.DateTimeSerde(),
+    types.TimeDeltaSerde(),
     types.DateSerde(),
     types.AtomSerde(),
     types.UUIDSerde(),
