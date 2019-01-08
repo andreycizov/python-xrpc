@@ -43,13 +43,13 @@ class ResultsReceiver:
         s.flush_ack(jid)
 
     @rpc(RPCType.Durable)
-    def finished_a(self, jid: RPCKey, job: Response):
+    def finished_a(self, jid: RPCKey, jres: Response):
         self.exit_in = time_now() + timedelta(seconds=0.5)
         trc('0').warning('Finished %s', self.exit_in)
         self._ack(jid)
 
     @rpc(RPCType.Durable)
-    def finished_b(self, jid: RPCKey, job: Response):
+    def finished_b(self, jid: RPCKey, jres: Response):
         trc('1').warning('Finished %s', self.exit_in)
         self._ack(jid)
         raise TerminationException('Finished')
