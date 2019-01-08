@@ -70,16 +70,8 @@ class PopenStruct:
     kwargs: Dict[str, Any]
 
 
-def popen(fn, *args, **kwargs) -> subprocess.Popen:
-    """
-    Please ensure you're not killing the process before it had started properly
-    :param fn:
-    :param args:
-    :param kwargs:
-    :return:
-    """
-
-    args = [
+def popen_encode(fn, *args, **kwargs) -> List[str]:
+    return [
         sys.executable,
         '-m',
         __name__,
@@ -92,10 +84,32 @@ def popen(fn, *args, **kwargs) -> subprocess.Popen:
         )),
     ]
 
+
+def popen(fn, *args, **kwargs) -> subprocess.Popen:
+    """
+    Please ensure you're not killing the process before it had started properly
+    :param fn:
+    :param args:
+    :param kwargs:
+    :return:
+    """
+
+    args = popen_encode(fn, *args, **kwargs)
+
     logging.getLogger(__name__).debug('Start %s', args)
 
     p = subprocess.Popen(args)
     return p
+
+
+class PopenStackException(Exception):
+    def __init__(self, abuser: Optional[subprocess.Popen] = None):
+        super().__init__(abuser)
+
+        self.abuser = abuser
+
+    def __str__(self):
+        return f'We have timed out and therefore killed all of the subprocesses (ABUSER: {self.abuser})'
 
 
 class PopenStack:
@@ -117,15 +131,23 @@ class PopenStack:
             for x in self.stack:
                 x.send_signal(signal.SIGKILL)
 
-            raise ValueError('We have excepted out and therefore killed all of the subprocesses')
+            raise PopenStackException()
         else:
-            try:
-                for x in self.stack:
+            should_kill = False
+            item = None
+
+            for x in self.stack:
+                try:
                     code = x.wait(timeout=self.timeout)
-            except subprocess.TimeoutExpired:
+                except subprocess.TimeoutExpired:
+                    item = x
+                    should_kill = True
+                    break
+
+            if should_kill:
                 for x in self.stack:
                     x.send_signal(signal.SIGKILL)
-                raise ValueError('We have timed out and therefore killed all of the subprocesses')
+                raise PopenStackException(item)
 
 
 def _popen_defn() -> Optional[PopenStruct]:

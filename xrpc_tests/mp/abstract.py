@@ -1,5 +1,7 @@
 import logging
 import multiprocessing
+from subprocess import Popen
+
 import shutil
 import signal
 import subprocess
@@ -11,13 +13,14 @@ from itertools import count
 from os import environ
 from tempfile import mkdtemp
 from time import sleep
-from typing import Optional
+from typing import Optional, Dict
 
 from dataclasses import field, dataclass
 
+from astsql.definition.types import Any
 from xrpc.actor import run_server
 from xrpc.logging import LoggerSetup, LL, logging_setup
-from xrpc.popen import PopenStack, cov, popen, _popen_defn
+from xrpc.popen import PopenStack, cov, popen, _popen_defn, PopenStackException, argv_decode
 from xrpc.trace import trc
 from xrpc.util import time_now
 
@@ -118,6 +121,7 @@ class ProcessHelper:
     ls: LoggerSetup = field(default_factory=lambda: LoggerSetup(LL(None, DEFAULT_LEVEL), [], ['stream:///stderr']))
     es: ExitStack = field(default_factory=ExitStack)
     ps: PopenStack = field(default_factory=lambda: PopenStack(10))
+    ms: Dict[Any, Popen] = field(default_factory=dict)
 
     def popen(self, fn, *args, **kwargs):
         b = popen(helper_main, self.ls, fn, *args, **kwargs)
@@ -137,7 +141,15 @@ class ProcessHelper:
         return self
 
     def __exit__(self, *args):
-        self.es.__exit__(*args)
+        try:
+            self.es.__exit__(*args)
+        except PopenStackException as e:
+            if e.abuser:
+                fn = e.abuser.args[-2]
+                decoded = argv_decode(e.abuser.args[-1])
+                raise ValueError(f'`{fn}` `{decoded}`')
+
+            raise
 
 
 class ProcessHelperCase(unittest.TestCase):
