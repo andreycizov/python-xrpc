@@ -43,7 +43,7 @@ def build_generic_context(t, ctx=SerdeStepContext()):
             args = tuple(ctx.generic_vals.get(x, x) for x in args)
             logging.getLogger(__name__ + '.list.a').debug('%s', args)
             maps = mmaps(params[len(args):], args)
-            t = List[args]
+            t = List[args[0]]
         elif is_dataclass(t.__origin__):
             params, args = t.__origin__.__parameters__, t.__args__
 
