@@ -670,7 +670,10 @@ def run_server(cls, cls_inst, bind_urls: Dict[str, str], horizon_each=60., actor
     sr = SignalRunner(el)
 
     if actor_name is None:
-        actor_name = cls.__name__
+        if hasattr(cls, '__name__'):
+            actor_name = cls.__name__
+        else:
+            actor_name = str(cls)
 
     act = actor_create(el, sr, cls, cls_inst, bind_urls, horizon_each, name=actor_name)
 
