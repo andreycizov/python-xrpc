@@ -9,7 +9,7 @@ from contextlib import ExitStack, contextmanager
 import dill
 import signal
 import subprocess
-from attr import dataclass
+from dataclasses import dataclass
 from datetime import timedelta
 from time import sleep
 from typing import Callable, Any, Tuple, Dict, List, Optional
