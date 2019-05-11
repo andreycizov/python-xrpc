@@ -207,9 +207,15 @@ class TestBroker(ProcessHelperCase):
         with self.ps.timer(5.) as tr, client_transport(
                 Worker[Request, Response], uw, ClientConfig(horz=False)) as br:
             x: Optional[WorkerMetric] = None
-            while x is None or x.workers_free < par_conf.processes * par_conf.threads:
+            slept = 0.
+            while True:
                 x = br.metrics()
-                tr.sleep(0.3)
+
+                if x is None or x.workers_free < par_conf.processes * par_conf.threads:
+                    slept = tr.sleep(0.3)
+                else:
+                    trc('slept1').errpr('%s', slept)
+                    break
 
         pidw.send_signal(SIGTERM)
 
