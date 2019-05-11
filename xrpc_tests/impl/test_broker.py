@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from xrpc.client import ClientConfig, client_transport
 from xrpc.dsl import RPCType, rpc, regular, signal, DEFAULT_GROUP
-from xrpc.error import TerminationException
+from xrpc.error import TerminationException, TimeoutError
 from xrpc.impl.broker import Broker, Worker, ClusterConf, MetricCollector, NodeMetric, WorkerMetric, BACKEND, \
     WorkerConf, BrokerMetric, BrokerResult, BrokerConf
 from xrpc.logging import LoggerSetup, LL
@@ -208,8 +208,15 @@ class TestBroker(ProcessHelperCase):
                 Worker[Request, Response], uw, ClientConfig(horz=False)) as br:
             x: Optional[WorkerMetric] = None
             slept = 0.
+
+            # while the WorkerBroker is starting up, it's being bombarded
+            # by loads of messages from Workers.
+            # it's thus missing the message
             while True:
-                x = br.metrics()
+                try:
+                    x = br.metrics()
+                except TimeoutError:
+                    x = None
 
                 if x is None or x.workers_free < par_conf.processes * par_conf.threads:
                     slept = tr.sleep(0.3)
