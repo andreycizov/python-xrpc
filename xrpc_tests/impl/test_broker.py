@@ -204,7 +204,7 @@ class TestBroker(ProcessHelperCase):
             uw, conf, ub, worker_function, None, par_conf=par_conf
         )
 
-        with self.ps.timer(5.) as tr, client_transport(
+        with self.ps.timer(20.) as tr, client_transport(
                 Worker[Request, Response], uw, ClientConfig(horz=False)) as br:
             x: Optional[WorkerMetric] = None
             slept = 0.
@@ -301,12 +301,18 @@ class TestBroker(ProcessHelperCase):
             }
         )
 
-        with self.ps.timer(5.) as tr, client_transport(
+        with self.ps.timer(10.) as tr, client_transport(
                 Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
             x = 0
-            while x == 0:
+            slept = 0.
+            while True:
                 x = br.metrics().workers
-                tr.sleep(1.)
+
+                if x == 0:
+                    slept = tr.sleep(1.)
+                else:
+                    trc('slept3').error('%s', slept)
+                    break
 
         with client_transport(Broker[Request, Response], ub_front) as br:
             br: Broker[Request, Request]
