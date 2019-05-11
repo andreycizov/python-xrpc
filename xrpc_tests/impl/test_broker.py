@@ -214,7 +214,7 @@ class TestBroker(ProcessHelperCase):
                 if x is None or x.workers_free < par_conf.processes * par_conf.threads:
                     slept = tr.sleep(0.3)
                 else:
-                    trc('slept1').errpr('%s', slept)
+                    trc('slept1').error('%s', slept)
                     break
 
         pidw.send_signal(SIGTERM)
