@@ -13,11 +13,10 @@ from itertools import count
 from os import environ
 from tempfile import mkdtemp
 from time import sleep
-from typing import Optional, Dict
+from typing import Any, Optional, Dict
 
 from dataclasses import field, dataclass
 
-from astsql.definition.types import Any
 from xrpc.actor import run_server
 from xrpc.logging import LoggerSetup, LL, logging_setup
 from xrpc.popen import PopenStack, cov, popen, _popen_defn, PopenStackException, argv_decode
