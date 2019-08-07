@@ -608,13 +608,10 @@ class DictSerde(SerdeType):
             r = {}
             k, v = None, None
             try:
-                print('zfs', val)
                 for k, v in val.items():
                     # either way (even if a field is non-optional), that field must not accept None as it's argument
                     ksk = ks(k)
                     vsv = vs(v)
-
-                    print(ksk, vsv)
                     r[ksk] = vsv
                     # r[f] = self.deps[i](val[f])
             except (TypeError, Exception) as e:
