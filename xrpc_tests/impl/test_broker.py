@@ -367,7 +367,7 @@ class TestBroker(ProcessHelperCase):
             }
         )
 
-        with self.ps.timer(5.) as tr, client_transport(
+        with self.ps.timer(10.) as tr, client_transport(
                 Broker[Request, Response], ub_front, ClientConfig(horz=False)) as br:
             x = 0
             while x == 0:
@@ -381,7 +381,7 @@ class TestBroker(ProcessHelperCase):
 
         b.send_signal(SIGTERM)
 
-        with self.ps.timer(5.) as tr, client_transport(Broker[Request, Response], ub_front) as br:
+        with self.ps.timer(10.) as tr, client_transport(Broker[Request, Response], ub_front) as br:
             x = 1
             while x > 0:
                 x = br.metrics().workers

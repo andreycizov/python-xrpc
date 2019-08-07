@@ -48,10 +48,16 @@ class TestRuntime(ProcessHelperCase):
             ua = f'unix://{td}/sock.sock'
             a = self.ps.popen(server_main_new, lambda: (ResetActor, ResetActor()), {DEFAULT_GROUP: ua + '#bind'})
 
-            sleep(0.5)
+            with self.ps.timer(10.) as tr:
+                while True:
+                    tr.sleep(0.5)
 
-            with client_transport(ResetActor, ua, ClientConfig(horz=False), origin=ua) as acli:
-                self.assertEqual(True, acli.stop())
+                    try:
+                        with client_transport(ResetActor, ua, ClientConfig(horz=False), origin=ua) as acli:
+                            self.assertEqual(True, acli.stop())
+                            break
+                    except FileNotFoundError:
+                        pass
 
             self.assertEqual(wait_all(a), [0])
         finally:
@@ -64,10 +70,16 @@ class TestRuntime(ProcessHelperCase):
             ua = f'unix://{td}/sock.sock'
             a = self.ps.popen(server_main_new, lambda: (ResetStrActor, ResetStrActor()), {DEFAULT_GROUP: ua + '#bind'})
 
-            sleep(0.5)
+            with self.ps.timer(10.) as tr:
+                while True:
+                    tr.sleep(0.5)
 
-            with client_transport(ResetStrActor, ua, ClientConfig(horz=False), origin=ua) as acli:
-                self.assertEqual(True, acli.stop())
+                    try:
+                        with client_transport(ResetStrActor, ua, ClientConfig(horz=False), origin=ua) as acli:
+                            self.assertEqual(True, acli.stop())
+                            break
+                    except FileNotFoundError:
+                        pass
 
             self.assertEqual(wait_all(a), [0])
         finally:
