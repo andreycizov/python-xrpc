@@ -40,12 +40,15 @@ def trc(postfix: Optional[str] = None, *, depth=1) -> logging.Logger:
     """
     x = inspect.stack()[depth]
 
-    code = x[0].f_code
-    func = [obj for obj in gc.get_referrers(code) if inspect.isfunction(obj)][0]
-
     mod = inspect.getmodule(x.frame)
 
-    parts = (mod.__name__, func.__qualname__)
+    code = x[0].f_code
+
+    try:
+        func = next(obj for obj in gc.get_referrers(code) if inspect.isfunction(obj))
+        parts = (mod.__name__, f'{func.__qualname__}:{x.lineno}')
+    except StopIteration:
+        parts = (f'{code.co_filename}:{x.lineno}',)
 
     if postfix:
         parts += (postfix,)
